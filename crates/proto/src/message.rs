@@ -58,7 +58,15 @@ pub enum Rate {
 impl Rate {
     /// The rate in readings per second.
     pub fn hertz(self) -> f32 {
-        todo!()
+        match self {
+            Self::Hz12_5 => 12.5,
+            Self::Hz26 => 26.0,
+            Self::Hz52 => 52.0,
+            Self::Hz104 => 104.0,
+            Self::Hz208 => 208.0,
+            Self::Hz416 => 416.0,
+            Self::Hz833 => 833.0,
+        }
     }
 }
 
@@ -78,7 +86,12 @@ pub enum AccelRange {
 impl AccelRange {
     /// How many g one raw count is worth (PROTO-4).
     pub fn g_per_count(self) -> f32 {
-        todo!()
+        match self {
+            Self::G2 => 0.000_061,
+            Self::G4 => 0.000_122,
+            Self::G8 => 0.000_244,
+            Self::G16 => 0.000_488,
+        }
     }
 }
 
@@ -100,7 +113,13 @@ pub enum GyroRange {
 impl GyroRange {
     /// How many degrees per second one raw count is worth (PROTO-4).
     pub fn dps_per_count(self) -> f32 {
-        todo!()
+        match self {
+            Self::Dps125 => 0.004_375,
+            Self::Dps250 => 0.008_75,
+            Self::Dps500 => 0.017_5,
+            Self::Dps1000 => 0.035,
+            Self::Dps2000 => 0.07,
+        }
     }
 }
 
@@ -116,7 +135,7 @@ pub struct AccelConfig {
 impl Default for AccelConfig {
     /// 104 Hz, ±2 g.
     fn default() -> Self {
-        todo!()
+        Self { rate: Rate::Hz104, range: AccelRange::G2 }
     }
 }
 
@@ -132,7 +151,7 @@ pub struct GyroConfig {
 impl Default for GyroConfig {
     /// 104 Hz, ±250 degrees per second.
     fn default() -> Self {
-        todo!()
+        Self { rate: Rate::Hz104, range: GyroRange::Dps250 }
     }
 }
 
@@ -218,13 +237,29 @@ pub enum Message {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
+    #[allow(clippy::float_cmp, reason = "the factors are exact constants")]
     fn proto_4_scale_factors_match_st_driver() {
-        todo!()
+        // ST lsm6ds3tr-c-pid: mg/LSB and mdps/LSB per full scale.
+        assert_eq!(AccelRange::G2.g_per_count(), 0.061e-3);
+        assert_eq!(AccelRange::G4.g_per_count(), 0.122e-3);
+        assert_eq!(AccelRange::G8.g_per_count(), 0.244e-3);
+        assert_eq!(AccelRange::G16.g_per_count(), 0.488e-3);
+        assert_eq!(GyroRange::Dps125.dps_per_count(), 4.375e-3);
+        assert_eq!(GyroRange::Dps250.dps_per_count(), 8.75e-3);
+        assert_eq!(GyroRange::Dps500.dps_per_count(), 17.5e-3);
+        assert_eq!(GyroRange::Dps1000.dps_per_count(), 35.0e-3);
+        assert_eq!(GyroRange::Dps2000.dps_per_count(), 70.0e-3);
     }
 
     #[test]
+    #[allow(clippy::float_cmp, reason = "the rate is an exact constant")]
     fn defaults_are_104_hz() {
-        todo!()
+        assert_eq!(AccelConfig::default().rate.hertz(), 104.0);
+        assert_eq!(GyroConfig::default().rate, Rate::Hz104);
+        assert_eq!(AccelConfig::default().range, AccelRange::G2);
+        assert_eq!(GyroConfig::default().range, GyroRange::Dps250);
     }
 }

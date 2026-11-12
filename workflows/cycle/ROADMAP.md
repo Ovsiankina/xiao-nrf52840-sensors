@@ -47,7 +47,7 @@ overrides `QA.md`. Start a project, or an adoption, on `poc`; move to
 | module | owner | step | branch | last oracle run |
 |---|---|---|---|---|
 | _example_ | mine · delegated | 1–10 · `needs contract rework` | `mod/<name>` | `2026-10-29 green` |
-| proto | delegated | 5 | | |
+| proto | delegated | 8 | `mod/proto` | `2026-11-12 green` |
 | api | delegated | 5 | | |
 | firmware | delegated | 5 | | |
 

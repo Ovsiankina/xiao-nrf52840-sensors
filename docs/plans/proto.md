@@ -52,8 +52,8 @@ pub const BLE_NAME: &str = "XIAO-Sense";
 pub const UART_DEFAULT_BAUD: u32 = 921_600;
 ```
 
-- [ ] Tests: `scale_factors_match_st_driver` (the ten values above), `defaults_are_104_hz`, `audio_block_holds_96_samples`.
-- [ ] Implement, `cargo test -p xiao-proto`, commit.
+- [x] Tests: `scale_factors_match_st_driver` (the ten values above), `defaults_are_104_hz`, `audio_block_holds_96_samples`.
+- [x] Implement, `cargo test -p xiao-proto`, commit.
 
 ### Task proto-02: framing
 
@@ -73,5 +73,5 @@ impl Decoder {
 }
 ```
 
-- [ ] Tests: `round_trip_every_command`, `round_trip_full_audio_block` (encoded length ≤ 244, the BLE payload), `garbage_then_frame_decodes`, `too_long_then_recovers`, `two_frames_back_to_back`.
-- [ ] Implement with `postcard::to_slice_cobs` / `postcard::from_bytes_cobs`, `cargo test -p xiao-proto`, commit.
+- [x] Tests: `round_trip_every_command`, `round_trip_full_audio_block` (encoded length ≤ 244, the BLE payload), `garbage_then_frame_decodes`, `too_long_then_recovers`, `two_frames_back_to_back`.
+- [x] Implement with `postcard::to_slice_cobs` / `postcard::from_bytes_cobs`, `cargo test -p xiao-proto`, commit.
