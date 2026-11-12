@@ -8,3 +8,5 @@ Never delete a row; set status `done` with the date._
 
 | date | module | step | what was needed | why a contract break | smallest unblocking change | status |
 |---|---|---|---|---|---|---|
+| 2026-11-12 | firmware | 4 | BLE bytes-per-second figure for FW-4 | SRS hole: "whether BLE can carry the mic stream" | measure on the board, replace the 60 000 placeholder in `sensors::link_speed` | open |
+| 2026-11-12 | api | 4 | default `attempts` and wait between tries; retry for USB and UART | SRS holes under 4.1 | owner states the values in `docs/srs.md`; code uses 3 attempts, 1 s, BLE only | open |

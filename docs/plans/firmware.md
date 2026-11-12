@@ -66,7 +66,7 @@ pub enum ImuError<E> { Bus(E), WrongChip(u8) }
 impl<I2C: embedded_hal_async::i2c::I2c> Lsm6ds3<I2C> {
     pub fn new(i2c: I2C) -> Self;                       // address 0x6A
     pub async fn apply(&mut self, cfg: ImuConfig) -> Result<(), ImuError<I2C::Error>>;  // checks WHO_AM_I, sets BDU + IF_INC, CTRL1_XL, CTRL2_G; None = power-down
-    pub async fn read(&mut self, cfg: ImuConfig) -> Result<([i16; 3], [i16; 3]), ImuError<I2C::Error>>;  // (accel, gyro) raw; one 12-byte read from 0x22
+    pub async fn read(&mut self) -> Result<([i16; 3], [i16; 3]), ImuError<I2C::Error>>;  // (accel, gyro) raw; one 12-byte read from 0x22
 }
 ```
 

@@ -47,9 +47,9 @@ overrides `QA.md`. Start a project, or an adoption, on `poc`; move to
 | module | owner | step | branch | last oracle run |
 |---|---|---|---|---|
 | _example_ | mine · delegated | 1–10 · `needs contract rework` | `mod/<name>` | `2026-10-29 green` |
-| proto | delegated | 4 | | |
-| api | delegated | 4 | | |
-| firmware | delegated | 4 | | |
+| proto | delegated | 5 | | |
+| api | delegated | 5 | | |
+| firmware | delegated | 5 | | |
 
 - **owner** `delegated`: an agent builds it in a `/goal` loop under the
   step-4 contract. `mine`: I write it by hand, no agent touches its
