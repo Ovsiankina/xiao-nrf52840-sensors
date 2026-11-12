@@ -18,6 +18,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::sync::oneshot;
 use uuid::Uuid;
 use xiao_proto::frame::{self, Decoder, MAX_FRAME};
 use xiao_proto::message::{BLE_NAME, Command, ImuConfig};
@@ -39,11 +40,59 @@ const SCAN: Duration = Duration::from_secs(5);
 const SCAN_POLL: Duration = Duration::from_millis(200);
 /// How long a read waits before giving the reader thread a turn.
 const READ_POLL: Duration = Duration::from_millis(100);
+/// How long the host may take to notice the board is gone: the BLE
+/// supervision timeout.
+const SUPERVISION: Duration = Duration::from_secs(6);
+/// How long one attempt may take past its scan: connect, discover and
+/// subscribe.
+const CONNECT: Duration = Duration::from_secs(5);
+
+/// How long a stream on a BLE link waits for a reading: long enough for
+/// the drop to be noticed and every reconnect attempt to run (API-2).
+// DECISION: the stream's 2 s, plus the supervision timeout, plus each
+// attempt's pause, scan and connection; 41 s with 3 attempts. Within it
+// a reconnect replays the sensors and the stream goes on; when every
+// attempt fails the link ends the stream first, with
+// `Timeout { attempts }`. 6 s and 5 s are guesses at BlueZ's defaults,
+// not measured: 2 s alone ended a stream before any reconnect could.
+fn patience(attempts: u8) -> Duration {
+    let attempt = PAUSE + SCAN + CONNECT;
+    crate::stream::PATIENCE + SUPERVISION + attempt * u32::from(attempts.max(1))
+}
+
+/// The longest closing a [`Ble`] link waits for the BLE thread to disconnect.
+// DECISION: 1 s: a BlueZ disconnect answers in well under that; a thread
+// stuck in a reconnect is not waited for any longer than this.
+const LINGER: Duration = Duration::from_secs(1);
 
 /// The link over Bluetooth Low Energy.
 #[derive(Debug)]
 pub struct Ble {
     pub(super) connection: super::Connection,
+}
+
+/// Tells the BLE thread to disconnect when the link closes (the [`Ble`]
+/// and every sensor on it gone), and waits up to [`LINGER`] for it, so the
+/// board is let go even when the process exits right after.
+// DECISION: a private field's Drop, as `StopOnDrop` in `link.rs`: no new
+// trait impl on a pub type. Without the wait the thread is killed at exit
+// before `disconnect()`, BlueZ keeps the board connected and the firmware
+// keeps the sensors held.
+// DECISION: held by the writing `BleTransport`, which the connection's
+// shared inside owns, not by `Ble`: sensors keep the link open past the
+// `Ble` value (they share its handle), so the disconnect waits for the last
+// of them. The reader thread's clone holds none: it ends on its own, and a
+// drop there would not be waited for at exit.
+#[derive(Debug)]
+struct Linger(Mutex<(Option<oneshot::Sender<()>>, Receiver<()>)>);
+
+impl Drop for Linger {
+    fn drop(&mut self) {
+        let (stop, done) = self.0.get_mut().unwrap_or_else(std::sync::PoisonError::into_inner);
+        drop(stop.take());
+        // Ends when the BLE thread does (its sender drops) or after LINGER.
+        let _ = done.recv_timeout(LINGER);
+    }
 }
 
 impl Ble {
@@ -105,17 +154,26 @@ impl BleBuilder {
     ///
     /// [`Error::Timeout`] when every attempt failed.
     pub fn open(self) -> Result<Ble, Error> {
+        let attempts = self.attempts;
         let (writes, to_board) = unbounded_channel();
         let (from_board, incoming) = mpsc::channel();
         let (ready, connected) = mpsc::channel();
-        thread::Builder::new()
-            .name("xiao-ble".into())
-            .spawn(move || run(&self, to_board, &from_board, &ready))?;
+        let (stop_tx, mut stop) = oneshot::channel();
+        let (finished, done) = mpsc::channel::<()>();
+        thread::Builder::new().name("xiao-ble".into()).spawn(move || {
+            // Dropped when the thread ends, which wakes `Linger`.
+            let _finished = finished;
+            run(&self, to_board, &mut stop, &from_board, &ready);
+        })?;
+        let linger = Some(Linger(Mutex::new((Some(stop_tx), done))));
         connected
             .recv()
             .map_err(|_| Error::Io(io::Error::other("the BLE thread ended before connecting")))??;
         let incoming = Arc::new(Mutex::new(Incoming { rx: incoming, left: Vec::new() }));
-        Ok(Ble { connection: Connection::new(Box::new(BleTransport { writes, incoming }))? })
+        let transport = BleTransport { writes, incoming, _linger: linger };
+        let mut connection = Connection::new(Box::new(transport))?;
+        connection.set_patience(patience(attempts));
+        Ok(Ble { connection })
     }
 }
 
@@ -154,10 +212,11 @@ fn retry<T>(
 
 /// The API's side of the BLE thread: bytes to write go out through a
 /// channel, notified bytes come in through another.
-#[derive(Clone)]
 struct BleTransport {
     writes: UnboundedSender<Vec<u8>>,
     incoming: Arc<Mutex<Incoming>>,
+    /// The writing half's only: stops the BLE thread when it goes.
+    _linger: Option<Linger>,
 }
 
 /// What the BLE thread passes up: notified bytes, or why it gave up.
@@ -195,7 +254,11 @@ impl Transport for BleTransport {
     }
 
     fn try_clone(&self) -> io::Result<Box<dyn Transport>> {
-        Ok(Box::new(self.clone()))
+        Ok(Box::new(Self {
+            writes: self.writes.clone(),
+            incoming: Arc::clone(&self.incoming),
+            _linger: None,
+        }))
     }
 }
 
@@ -230,6 +293,7 @@ enum Event {
 fn run(
     settings: &BleBuilder,
     mut to_board: UnboundedReceiver<Vec<u8>>,
+    stop: &mut oneshot::Receiver<()>,
     from_board: &Sender<Inbound>,
     ready: &Sender<Result<(), Error>>,
 ) {
@@ -258,7 +322,7 @@ fn run(
 
     let mut held = Held::default();
     loop {
-        match runtime.block_on(pump(&mut board, &mut to_board, from_board, &mut held)) {
+        match runtime.block_on(pump(&mut board, &mut to_board, stop, from_board, &mut held)) {
             End::Closed => {
                 let _ = runtime.block_on(board.peripheral.disconnect());
                 return;
@@ -359,6 +423,7 @@ async fn named(adapter: &Adapter, name: &str) -> Result<Option<Peripheral>, Erro
 async fn pump(
     board: &mut Board,
     to_board: &mut UnboundedReceiver<Vec<u8>>,
+    stop: &mut oneshot::Receiver<()>,
     from_board: &Sender<Inbound>,
     held: &mut Held,
 ) -> End {
@@ -375,7 +440,11 @@ async fn pump(
     let writes = stream::poll_fn(|cx| to_board.poll_recv(cx))
         .map(Event::Write)
         .chain(stream::once(std::future::ready(Event::Closed)));
-    let mut events = stream::select(stream::select(notified, gone), writes);
+    // The link closed (`Linger`): its sender is gone. Polled once at
+    // most: `pump` returns on it and is not called again.
+    let stopped = stream::once(stop).map(|_| Event::Closed);
+    let mut events =
+        stream::select(stream::select(notified, gone), stream::select(writes, stopped));
 
     while let Some(event) = events.next().await {
         match event {
@@ -468,7 +537,10 @@ fn io_error(error: btleplug::Error) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use super::{Ble, BleTransport, Held, Inbound, Incoming, forget_queued, retry};
+    use super::{
+        Ble, BleTransport, Held, Inbound, Incoming, LINGER, Linger, PAUSE, SCAN, SUPERVISION,
+        forget_queued, patience, retry,
+    };
     use crate::link::Connection;
     use crate::{Error, Mic};
     use std::cell::Cell;
@@ -478,8 +550,9 @@ mod tests {
     use std::thread;
     use std::time::Duration;
     use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
+    use tokio::sync::oneshot::error::TryRecvError;
     use xiao_proto::frame::{self, Decoder, MAX_FRAME};
-    use xiao_proto::message::{Command, GyroConfig, ImuConfig, Message, Sensor};
+    use xiao_proto::message::{AudioBlock, Command, GyroConfig, ImuConfig, Message, Sensor};
 
     fn frame_of(command: Command) -> Vec<u8> {
         let mut buf = [0; MAX_FRAME];
@@ -494,11 +567,87 @@ mod tests {
     /// A [`Ble`] whose BLE thread is played by the test: the receiver gets
     /// what the API writes, the sender passes up what the board notifies.
     fn memory_ble() -> (Ble, UnboundedReceiver<Vec<u8>>, Sender<Inbound>) {
+        // No BLE thread: `Linger` finds it ended at once.
+        let (stop, _) = tokio::sync::oneshot::channel();
+        let linger = Some(Linger(Mutex::new((Some(stop), mpsc::channel().1))));
         let (writes, to_board) = unbounded_channel();
         let (from_board, rx) = mpsc::channel();
         let incoming = Arc::new(Mutex::new(Incoming { rx, left: Vec::new() }));
-        let connection = Connection::new(Box::new(BleTransport { writes, incoming })).unwrap();
+        let transport = BleTransport { writes, incoming, _linger: linger };
+        let mut connection = Connection::new(Box::new(transport)).unwrap();
+        connection.set_patience(patience(3));
         (Ble { connection }, to_board, from_board)
+    }
+
+    /// Plays the firmware: answers the first command with `On` for the
+    /// mic, then hands the write channel back.
+    fn mic_answered(
+        mut to_board: UnboundedReceiver<Vec<u8>>,
+        board: Sender<Inbound>,
+    ) -> thread::JoinHandle<(Command, UnboundedReceiver<Vec<u8>>)> {
+        thread::spawn(move || {
+            let mut decoder = Decoder::new();
+            let command = loop {
+                let bytes = to_board.blocking_recv().expect("a command arrives");
+                if let Some(Ok(command)) = bytes.iter().find_map(|&b| decoder.feed::<Command>(b)) {
+                    break command;
+                }
+            };
+            board.send(Ok(message_frame(&Message::On(Sensor::Mic)))).unwrap();
+            (command, to_board)
+        })
+    }
+
+    #[test]
+    fn api_2_stream_outlasts_a_reconnect() {
+        // Every attempt (pause, scan) fits, after the drop is noticed.
+        for attempts in [0, 1, 3, 5, u8::MAX] {
+            let window = SUPERVISION + (PAUSE + SCAN) * u32::from(attempts.max(1));
+            assert!(patience(attempts) > window, "{attempts} attempts");
+        }
+        // The board is silent for 2.5 s (out of range, reconnecting):
+        // the stream waits, and goes on with the replayed stream.
+        let (ble, to_board, from_board) = memory_ble();
+        let firmware = mic_answered(to_board, from_board.clone());
+        let mic = Mic::on(&ble).unwrap();
+        let _to_board = firmware.join().unwrap();
+        let board = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(2_500));
+            from_board.send(Ok(message_frame(&Message::On(Sensor::Mic)))).unwrap();
+            let block = AudioBlock { counter: 0, pcm: [1, 2].into_iter().collect() };
+            from_board.send(Ok(message_frame(&Message::Audio(block)))).unwrap();
+            from_board
+        });
+        assert!(matches!((&mic).next(), Some(Ok(_))), "no timeout during the outage");
+        drop(board.join().unwrap());
+    }
+
+    #[test]
+    fn drop_stops_the_ble_thread_and_waits_for_it() {
+        // Plays the BLE thread: waits for the stop, then takes 200 ms to
+        // disconnect. Dropping `Linger` returns only once it is done.
+        let (stop, mut stopped) = tokio::sync::oneshot::channel::<()>();
+        let (finished, done) = mpsc::channel::<()>();
+        let disconnected = Arc::new(Mutex::new(false));
+        let flag = Arc::clone(&disconnected);
+        thread::spawn(move || {
+            let _finished = finished;
+            while matches!(stopped.try_recv(), Err(TryRecvError::Empty)) {
+                thread::sleep(Duration::from_millis(5));
+            }
+            thread::sleep(Duration::from_millis(200));
+            *flag.lock().unwrap() = true;
+        });
+        drop(Linger(Mutex::new((Some(stop), done))));
+        assert!(*disconnected.lock().unwrap(), "the disconnect ran before the drop returned");
+
+        // A thread that never ends is waited for LINGER, no longer.
+        let (stop, _stopped) = tokio::sync::oneshot::channel::<()>();
+        let (_finished, done) = mpsc::channel::<()>();
+        let start = std::time::Instant::now();
+        drop(Linger(Mutex::new((Some(stop), done))));
+        let waited = start.elapsed();
+        assert!(waited >= LINGER && waited < LINGER * 2, "waited {waited:?}");
     }
 
     #[test]
@@ -550,21 +699,10 @@ mod tests {
 
     #[test]
     fn api_2_reconnect_gives_up_with_timeout() {
-        let (ble, mut to_board, from_board) = memory_ble();
+        let (ble, to_board, from_board) = memory_ble();
 
         // The board answers MicOn.
-        let board = from_board.clone();
-        let firmware = thread::spawn(move || {
-            let mut decoder = Decoder::new();
-            let command = loop {
-                let bytes = to_board.blocking_recv().expect("a command arrives");
-                if let Some(Ok(command)) = bytes.iter().find_map(|&b| decoder.feed::<Command>(b)) {
-                    break command;
-                }
-            };
-            board.send(Ok(message_frame(&Message::On(Sensor::Mic)))).unwrap();
-            (command, to_board)
-        });
+        let firmware = mic_answered(to_board, from_board.clone());
         let mic = Mic::on(&ble).unwrap();
         let (command, _to_board) = firmware.join().unwrap();
         assert_eq!(command, Command::MicOn);

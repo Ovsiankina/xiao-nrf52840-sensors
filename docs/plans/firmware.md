@@ -53,7 +53,7 @@ pub struct Counter(u32);  impl Counter { pub const fn new() -> Self; pub fn next
 
 `// DECISION:` the BLE figure (60_000) is a placeholder for the SRS hole "whether BLE can carry the mic"; measured in fw-06.
 
-- [ ] Tests: `fw_1_busy_names_holding_link`, `fw_1_two_sensors_two_links`, `fw_2_imu_halves_share_one_link`, `fw_3_uart_default_is_921600` (`link_speed(Uart, UART_DEFAULT_BAUD) == 92_160`), `fw_4_mic_refused_on_slow_uart` (115200 → `TooSlow { needs: 34_000, link_has: 11_520 }`), `fw_5_counter_counts_and_wraps`, `fw_6_unrequested_half_stays_off`, `same_link_may_reconfigure`, `release_link_frees_its_sensors`. Implement, commit.
+- [x] Tests: `fw_1_busy_names_holding_link`, `fw_1_two_sensors_two_links`, `fw_2_imu_halves_share_one_link`, `fw_3_uart_default_is_921600` (`link_speed(Uart, UART_DEFAULT_BAUD) == 92_160`), `fw_4_mic_refused_on_slow_uart` (115200 → `TooSlow { needs: 34_000, link_has: 11_520 }`), `fw_5_counter_counts_and_wraps`, `fw_6_unrequested_half_stays_off`, `same_link_may_reconfigure`, `release_link_frees_its_sensors`. Implement, commit.
 
 ### Task fw-02: IMU registers
 
@@ -73,7 +73,7 @@ impl<I2C: embedded_hal_async::i2c::I2c> Lsm6ds3<I2C> {
 
 Registers: WHO_AM_I 0x0F (=0x6A), CTRL1_XL 0x10, CTRL2_G 0x11, CTRL3_C 0x12 (BDU bit 6, IF_INC bit 2), OUTX_L_G 0x22 (gyro x,y,z then accel x,y,z, little-endian). ODR field (bits 7:4): 12.5 Hz=1, 26=2, 52=3, 104=4, 208=5, 416=6, 833=7. FS_XL (bits 3:2): 2 g=0, 16 g=1, 4 g=2, 8 g=3. FS_G (bits 3:2): 250=0, 500=1, 1000=2, 2000=3; 125 dps = bit 1.
 
-- [ ] Tests with an in-file fake I2C: `apply_writes_ctrl_registers` (Hz104/G4 + Hz104/Dps500 → CTRL1_XL 0x48, CTRL2_G 0x44), `off_half_is_powered_down` (0x00), `wrong_chip_is_an_error`, `read_splits_gyro_then_accel`. Run with `embassy_futures::block_on`. Implement, commit.
+- [x] Tests with an in-file fake I2C: `apply_writes_ctrl_registers` (Hz104/G4 + Hz104/Dps500 → CTRL1_XL 0x48, CTRL2_G 0x44), `off_half_is_powered_down` (0x00), `wrong_chip_is_an_error`, `read_splits_gyro_then_accel`. Run with `embassy_futures::block_on`. Implement, commit.
 
 ### Task fw-03: board and microphone
 
@@ -81,7 +81,7 @@ Registers: WHO_AM_I 0x0F (=0x6A), CTRL1_XL 0x10, CTRL2_G 0x11, CTRL3_C 0x12 (BDU
 
 **Produces:** `board::Board::take(Peripherals) -> Board` with fields `imu: ImuPins` (twim peripheral, sda, scl, power), `mic: MicPins` (pdm, clk, data, power), `uart: UartPins`, `usb`, `ble` (the peripherals nrf-sdc/mpsl need); `board::Power` (wraps an `Output`, `on().await` waits the settle time, `off()`). `mic::Mic::new(MicPins, irqs)`, `mic.on().await`, `mic.off()`, `mic.block().await -> AudioBlock` payload of 96 samples.
 
-- [ ] Implement, board build green, commit.
+- [x] Implement, board build green, commit.
 
 ### Task fw-04: USB and UART links
 
@@ -89,7 +89,7 @@ Registers: WHO_AM_I 0x0F (=0x6A), CTRL1_XL 0x10, CTRL2_G 0x11, CTRL3_C 0x12 (BDU
 
 **Produces:** `link::Inbox` = `Channel<(Link, Command), 4>`; `link::Outbox` = `Channel<Message, 8>` per link; `usb::run(usb, &Inbox, &Outbox) -> !` (CDC-ACM, vendor id 0x2886, product "XIAO-Sense"), `uart::run(pins, baud, &Inbox, &Outbox) -> !`. On USB disconnect: post nothing, call back `on_down(Link::Usb)` so main releases its sensors.
 
-- [ ] Implement, board build green, commit.
+- [x] Implement, board build green, commit.
 
 ### Task fw-05: main loop
 
@@ -97,7 +97,7 @@ Registers: WHO_AM_I 0x0F (=0x6A), CTRL1_XL 0x10, CTRL2_G 0x11, CTRL3_C 0x12 (BDU
 
 **Produces:** spawns the link tasks, then loops on `Inbox`: `Table::request` → `Refused` or switch the sensor and reply `On`/`Off`; sensor tasks push `Audio` / `Imu` messages with `Counter` to the holder's `Outbox` using `try_send` (full = dropped).
 
-- [ ] Implement, board build green, commit.
+- [x] Implement, board build green, commit.
 
 ### Task fw-06: BLE link and bring-up
 
@@ -105,5 +105,5 @@ Registers: WHO_AM_I 0x0F (=0x6A), CTRL1_XL 0x10, CTRL2_G 0x11, CTRL3_C 0x12 (BDU
 
 **Produces:** `ble::run(ble, &Inbox, &Outbox) -> !`: advertises as `BLE_NAME`, Nordic UART Service, write characteristic → `Decoder`, `Outbox` → notifications; on disconnect `on_down(Link::Ble)`.
 
-- [ ] Implement, board build green, commit.
+- [x] Implement, board build green, commit.
 - [ ] Manual, on the board: `./scripts/flash.sh`, then run each `xiao-api` example; note the measured BLE throughput in `docs/srs.md`'s hole (owner edits) via `/issue question`.

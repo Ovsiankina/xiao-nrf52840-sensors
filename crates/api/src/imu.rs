@@ -454,7 +454,8 @@ fn claim<T>(
     }
     held.imu = config;
     let joining = has.accel.is_some() || has.gyro.is_some();
-    Ok((connection.share(), stream(rx, joining, convert)))
+    let stream = stream(rx, joining, convert).with_patience(connection.patience());
+    Ok((connection.share(), stream))
 }
 
 fn stream<T>(

@@ -71,7 +71,8 @@ impl Mic {
             return Err(error);
         }
         held.mic = true;
-        Ok(Self { connection: connection.share(), stream: Stream::new(rx, audio) })
+        let stream = Stream::new(rx, audio).with_patience(connection.patience());
+        Ok(Self { connection: connection.share(), stream })
     }
 
     /// The newest block, skipping any older ones not yet read (API-3).

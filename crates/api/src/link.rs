@@ -109,6 +109,8 @@ struct Inner {
     writer: Mutex<Writer>,
     shared: Arc<Shared>,
     held: Mutex<Held>,
+    /// How long a sensor's stream on this link waits for a reading.
+    patience: Duration,
     _stop: StopOnDrop,
 }
 
@@ -137,8 +139,22 @@ struct Routes {
     dead: Option<Error>,
     // DECISION: several subscribers per sensor, each getting every reading:
     // a `Gyro` and an `Accel` on one link both read the one IMU stream (FW-2).
-    streams: [Vec<SyncSender<Result<Message, Error>>>; 2],
+    streams: [Vec<Subscriber>; 2],
     replies: [Option<Pending>; 2],
+}
+
+/// One reader of a sensor's stream.
+#[derive(Debug)]
+struct Subscriber {
+    tx: SyncSender<Result<Message, Error>>,
+    /// `false` until the board answers `On` for the sensor: readings
+    /// before it belong to a stream that was running already.
+    // DECISION: a new subscriber skips readings until the next `On` for
+    // its sensor. The firmware starts the counter at 0 on every `On` and
+    // sends `On` before the stream's readings, so what comes earlier is
+    // an old stream (a UART sensor still held from a previous process)
+    // whose counter would count as drops (API-4).
+    on: bool,
 }
 
 /// A [`Connection::request`] waiting for its answer.
@@ -186,6 +202,7 @@ impl Connection {
         let inner = Inner {
             writer: Mutex::new(Writer(transport)),
             held: Mutex::new(Held { mic: false, imu: ImuConfig { accel: None, gyro: None } }),
+            patience: crate::stream::PATIENCE,
             _stop: StopOnDrop(Arc::clone(&shared)),
             shared,
         };
@@ -256,6 +273,22 @@ impl Connection {
         lock(&self.inner.shared.routes).add(sensor)
     }
 
+    /// How long a sensor's stream on this link waits for a reading
+    /// before it ends with [`Error::Timeout`].
+    pub(crate) fn patience(&self) -> Duration {
+        self.inner.patience
+    }
+
+    /// Sets how long the streams on this new link wait for a reading.
+    ///
+    /// # Panics
+    ///
+    /// When a sensor already shares the connection; a link calls it
+    /// right after [`Connection::new`].
+    fn set_patience(&mut self, patience: Duration) {
+        Arc::get_mut(&mut self.inner).expect("a new link has one handle").patience = patience;
+    }
+
     /// What the sensor values on this link hold. Kept locked across a
     /// whole on or off, so two of them never compute a command from the
     /// same stale state.
@@ -265,9 +298,18 @@ impl Connection {
 
     fn write(&self, cmd: Command) -> Result<(), Error> {
         let mut buf = [0; MAX_FRAME];
-        let bytes = frame::encode(&cmd, &mut buf)
+        let frame = frame::encode(&cmd, &mut buf)
             .map_err(|_| Error::Io(io::Error::other("command does not fit one frame")))?;
-        lock(&self.inner.writer).0.write(bytes)?;
+        // DECISION: every command goes out after a lone zero, in the same
+        // write. Bytes the board got before it (the tty echoing the zero
+        // the firmware parks in the IN endpoint as `^@` on the first open,
+        // before raw mode) are ended by it and dropped by the firmware's
+        // decoder, instead of being glued to the command and failing it.
+        // A lone zero is an empty gap to the decoder: no frame, no reply.
+        let mut bytes = Vec::with_capacity(frame.len() + 1);
+        bytes.push(0);
+        bytes.extend_from_slice(frame);
+        lock(&self.inner.writer).0.write(&bytes)?;
         Ok(())
     }
 }
@@ -318,7 +360,12 @@ fn read_loop(mut transport: Box<dyn Transport>, shared: &Shared) {
 fn route(shared: &Shared, message: &Message) {
     let mut routes = lock(&shared.routes);
     match *message {
-        Message::On(sensor) => routes.answer(sensor, Some(true), Ok(())),
+        Message::On(sensor) => {
+            for subscriber in &mut routes.streams[slot(sensor)] {
+                subscriber.on = true;
+            }
+            routes.answer(sensor, Some(true), Ok(()));
+        }
         Message::Off(sensor) => routes.answer(sensor, Some(false), Ok(())),
         Message::Refused { sensor, reason } => routes.answer(sensor, None, Err(reason)),
         Message::Audio(_) => routes.stream(Sensor::Mic, message),
@@ -333,7 +380,7 @@ impl Routes {
         let (tx, rx) = mpsc::sync_channel(QUEUE);
         match &self.dead {
             Some(cause) => end(tx, again(cause)),
-            None => self.streams[slot(sensor)].push(tx),
+            None => self.streams[slot(sensor)].push(Subscriber { tx, on: false }),
         }
         rx
     }
@@ -352,18 +399,37 @@ impl Routes {
             // a BLE reconnect sent again) ends that sensor's streams with the
             // refusal, instead of leaving them waiting for readings that will
             // never come.
-            for tx in std::mem::take(&mut self.streams[slot(sensor)]) {
-                end(tx, refused(refusal));
+            for subscriber in std::mem::take(&mut self.streams[slot(sensor)]) {
+                end(subscriber.tx, refused(refusal));
+            }
+        } else if on == Some(false) {
+            // DECISION: an `Off` nobody asked for (the board switched the
+            // sensor off: its chip stopped answering) ends the streams that
+            // saw `On` with `Timeout { attempts: 1 }`, the error their
+            // patience would have given, only now instead of 2 s to 41 s
+            // later. A subscriber still waiting for its `On` stays: the
+            // `Off` belongs to the stream before it.
+            let streams = std::mem::take(&mut self.streams[slot(sensor)]);
+            let (ended, waiting): (Vec<_>, Vec<_>) = streams.into_iter().partition(|s| s.on);
+            self.streams[slot(sensor)] = waiting;
+            for subscriber in ended {
+                end(subscriber.tx, Error::Timeout { attempts: 1 });
             }
         }
     }
 
-    /// Passes a reading to each of the sensor's subscribers; forgets the
-    /// ones that have gone away, skips the ones whose queue is full.
+    /// Passes a reading to each of the sensor's subscribers that saw
+    /// `On`; forgets the ones that have gone away, skips the ones whose
+    /// queue is full.
     fn stream(&mut self, sensor: Sensor, message: &Message) {
-        self.streams[slot(sensor)].retain(|tx| match tx.try_send(Ok(message.clone())) {
-            Ok(()) | Err(TrySendError::Full(_)) => true,
-            Err(TrySendError::Disconnected(_)) => false,
+        self.streams[slot(sensor)].retain(|subscriber| {
+            if !subscriber.on {
+                return true;
+            }
+            match subscriber.tx.try_send(Ok(message.clone())) {
+                Ok(()) | Err(TrySendError::Full(_)) => true,
+                Err(TrySendError::Disconnected(_)) => false,
+            }
         });
     }
 }
@@ -383,8 +449,8 @@ fn end(tx: SyncSender<Result<Message, Error>>, error: Error) {
 fn shut(shared: &Shared, cause: &Error) {
     let mut routes = lock(&shared.routes);
     routes.dead = Some(again(cause));
-    for tx in routes.streams.iter_mut().flat_map(std::mem::take) {
-        end(tx, again(cause));
+    for subscriber in routes.streams.iter_mut().flat_map(std::mem::take) {
+        end(subscriber.tx, again(cause));
     }
     // Dropping the reply senders wakes `request`, which reads `dead`.
     routes.replies = [None, None];
@@ -620,6 +686,7 @@ mod tests {
     use crate::{Gyro, Mic};
     use std::thread;
     use std::time::{Duration, Instant};
+    use xiao_proto::frame::Decoder;
     use xiao_proto::message::{AudioBlock, Command, ImuReading, Link, Message, Refusal, Sensor};
 
     const QUIET: Duration = Duration::from_millis(200);
@@ -675,6 +742,32 @@ mod tests {
     }
 
     #[test]
+    fn command_after_a_zero_survives_garbage_before_it() {
+        // The tty echoed `^@` to the board before the first command (the
+        // firmware's parked zero, on the first open): the zero the API
+        // sends first ends it, and the command still decodes.
+        let (usb, board) = memory_usb();
+        usb.connection().tell(Command::MicOn).unwrap();
+        let sent: Vec<u8> = {
+            let rx = lock(&board.rx);
+            std::iter::from_fn(|| rx.recv_timeout(QUIET).ok()).collect()
+        };
+        assert_eq!(sent.first(), Some(&0), "{sent:?}");
+
+        let decode = |wire: &[u8]| {
+            let mut decoder = Decoder::new();
+            wire.iter().filter_map(|&b| decoder.feed::<Command>(b)).collect::<Vec<_>>()
+        };
+        // Alone, the zero makes no frame: nothing for the firmware to answer.
+        assert_eq!(decode(&sent), vec![Ok(Command::MicOn)]);
+        let mut echoed = vec![0x5E, 0x40];
+        echoed.extend_from_slice(&sent);
+        let decoded = decode(&echoed);
+        assert_eq!(decoded.last(), Some(&Ok(Command::MicOn)), "{decoded:?}");
+        assert!(decoded.iter().rev().skip(1).all(Result::is_err), "{decoded:?}");
+    }
+
+    #[test]
     fn refusal_becomes_error() {
         let (usb, board) = memory_usb();
 
@@ -701,6 +794,8 @@ mod tests {
         let (usb, mut board) = memory_usb();
         let mic = usb.connection().subscribe(Sensor::Mic);
         let imu = usb.connection().subscribe(Sensor::Imu);
+        board.send(&Message::On(Sensor::Mic));
+        board.send(&Message::On(Sensor::Imu));
 
         let reading = ImuReading { counter: 7, accel: Some([1, 2, 3]), gyro: None };
         board.send(&Message::Imu(reading));
@@ -711,6 +806,47 @@ mod tests {
         let got = mic.recv_timeout(Duration::from_secs(1)).unwrap().unwrap();
         assert!(matches!(got, Message::Audio(AudioBlock { counter: 3, .. })), "{got:?}");
         assert!(imu.recv_timeout(QUIET).is_err(), "audio did not reach the IMU");
+    }
+
+    #[test]
+    fn reading_before_on_is_an_old_stream() {
+        // A UART sensor still streams for a previous process when a new
+        // one subscribes and asks: its readings before `On` are not
+        // handed out, so they cannot count as drops (API-4).
+        let shared = Shared::default();
+        let rx = lock(&shared.routes).add(Sensor::Imu);
+        let reading = |counter| Message::Imu(ImuReading { counter, accel: None, gyro: None });
+        route(&shared, &reading(6_240));
+        route(&shared, &Message::On(Sensor::Imu));
+        route(&shared, &reading(0));
+        let stream = Stream::new(rx, |message| match message {
+            Message::Imu(reading) => Some(reading.counter),
+            _ => None,
+        });
+        assert_eq!(stream.next().unwrap().unwrap(), 0);
+        assert_eq!(stream.dropped(), Dropped(0));
+    }
+
+    #[test]
+    fn unasked_off_ends_the_running_stream() {
+        let shared = Shared::default();
+        let running = lock(&shared.routes).add(Sensor::Imu);
+        route(&shared, &Message::On(Sensor::Imu));
+        let starting = lock(&shared.routes).add(Sensor::Imu);
+        let mic = lock(&shared.routes).add(Sensor::Mic);
+        route(&shared, &Message::On(Sensor::Mic));
+
+        route(&shared, &Message::Off(Sensor::Imu));
+        let got = running.recv_timeout(QUIET);
+        assert!(matches!(got, Ok(Err(Error::Timeout { attempts: 1 }))), "{got:?}");
+        assert!(running.recv_timeout(QUIET).is_err(), "then the stream ends");
+
+        // Not yet on, or another sensor: untouched.
+        route(&shared, &Message::On(Sensor::Imu));
+        let reading = ImuReading { counter: 0, accel: None, gyro: Some([1, 2, 3]) };
+        route(&shared, &Message::Imu(reading));
+        assert_eq!(starting.recv_timeout(QUIET).unwrap().unwrap(), Message::Imu(reading));
+        assert!(mic.try_recv().is_err(), "the mic stream goes on");
     }
 
     #[test]
@@ -772,6 +908,7 @@ mod tests {
         // what was dropped shows up as a counter gap.
         let shared = Shared::default();
         let rx = lock(&shared.routes).add(Sensor::Imu);
+        route(&shared, &Message::On(Sensor::Imu));
         let reading = |counter| Message::Imu(ImuReading { counter, accel: None, gyro: None });
         let extra = 5;
         let queue = u32::try_from(QUEUE).unwrap();

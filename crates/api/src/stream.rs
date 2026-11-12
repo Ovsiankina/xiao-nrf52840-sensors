@@ -25,7 +25,7 @@ type Convert<T> = Box<dyn Fn(Message) -> Option<T> + Send>;
 // that cannot notice the board going away (UART behind an adapter) never
 // blocks for ever; the slowest stream (12.5 Hz) sends every 80 ms.
 /// How long `next` and `latest` wait for a reading before giving up.
-const PATIENCE: Duration = Duration::from_secs(2);
+pub(crate) const PATIENCE: Duration = Duration::from_secs(2);
 
 /// One sensor's readings, from the [`Receiver`] that
 /// `Connection::subscribe` returned. Counts counter gaps as it goes and
@@ -90,6 +90,12 @@ impl<T> Stream<T> {
             dropped: AtomicU64::new(0),
             patience: PATIENCE,
         }
+    }
+
+    /// The same stream, waiting up to `patience` for each reading.
+    pub(crate) fn with_patience(mut self, patience: Duration) -> Self {
+        self.patience = patience;
+        self
     }
 
     /// Like [`Stream::new`], for a sensor that joins a stream already
@@ -382,6 +388,20 @@ mod tests {
         assert_eq!(stream.latest().unwrap(), 1);
         assert!(matches!(stream.next(), Some(Err(Error::Disconnected))));
         assert!(stream.next().is_none());
+    }
+
+    #[test]
+    fn patience_is_set_per_link() {
+        // A BLE link gives its streams time to outlast a reconnect.
+        let (tx, stream) = counters();
+        let stream = stream.with_patience(Duration::from_millis(600));
+        let late = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(300));
+            tx.send(Ok(reading(0))).unwrap();
+            tx
+        });
+        assert_eq!(stream.next().unwrap().unwrap(), 0, "waited past 300 ms");
+        drop(late.join().unwrap());
     }
 
     #[test]
