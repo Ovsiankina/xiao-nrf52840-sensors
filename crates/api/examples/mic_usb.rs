@@ -1,4 +1,6 @@
 //! Microphone over USB: print the loudest sample of each block.
+//!
+//! Run with `cargo run -p xiao-api --example mic_usb`.
 
 use xiao_api::{Error, Mic, Usb};
 

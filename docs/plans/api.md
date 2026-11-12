@@ -44,7 +44,7 @@ pub enum Error {
 pub use xiao_proto::message::{AccelRange, GyroRange, Link, Rate};
 ```
 
-- [ ] Test `error_messages_name_the_cause` (Busy names the link; TooSlow shows both numbers). Implement, commit.
+- [x] Test `error_messages_name_the_cause` (Busy names the link; TooSlow shows both numbers). Implement, commit.
 
 ### Task api-02: link core
 
@@ -52,7 +52,7 @@ pub use xiao_proto::message::{AccelRange, GyroRange, Link, Rate};
 
 **Produces:** private `trait Transport: Send { fn write(&mut self, bytes: &[u8]) -> io::Result<()>; fn read(&mut self, buf: &mut [u8]) -> io::Result<usize>; }`; private `struct Connection` (reader thread + per-sensor `mpsc` routes) with `fn request(&self, cmd: Command) -> Result<(), Error>` (2 s reply timeout) and `fn subscribe(&self, sensor: Sensor) -> Receiver<Result<Message, Error>>`; `pub(crate) fn memory_pair()` test transport; a sealed public `trait AsLink` implemented by `Usb`, `Ble`, `Uart`.
 
-- [ ] Tests: `api_1_sensor_goes_on_over_the_link_it_was_given`, `request_times_out_without_reply`, `refusal_becomes_error`. Implement, commit.
+- [x] Tests: `api_1_sensor_goes_on_over_the_link_it_was_given`, `request_times_out_without_reply`, `refusal_becomes_error`. Implement, commit.
 
 ### Task api-03: stream
 
@@ -60,7 +60,7 @@ pub use xiao_proto::message::{AccelRange, GyroRange, Link, Rate};
 
 **Produces:** private `struct Stream<T>` wrapping a `Receiver`: `next()`, `latest()` (drains, returns newest; blocks for the first), `dropped() -> Dropped` from counter gaps (wrapping subtraction).
 
-- [ ] Tests: `api_3_stream_and_latest`, `api_4_counter_gap_is_reported`, `counter_wrap_is_not_a_drop`, `dead_link_ends_the_stream_with_one_error`. Implement, commit.
+- [x] Tests: `api_3_stream_and_latest`, `api_4_counter_gap_is_reported`, `counter_wrap_is_not_a_drop`, `dead_link_ends_the_stream_with_one_error`. Implement, commit.
 
 ### Task api-04: sensors
 
@@ -82,7 +82,7 @@ pub struct Imu<'l>;   // on(&link), builder with accel_range/gyro_range/rate, Mo
 
 Raw counts become `G` / `Dps` with `AccelRange::g_per_count` / `GyroRange::dps_per_count` of the config that was sent.
 
-- [ ] Tests (in-memory firmware stand-in): `mic_iterates_audio_blocks`, `gyro_counts_become_dps` (raw 1000 at Dps500 → `Dps(17.5)`), `accel_counts_become_g` (raw 16384 at G2 → ≈`G(0.9994)`), `drop_sends_off_once`, `busy_names_the_holding_link`. Implement, commit.
+- [x] Tests (in-memory firmware stand-in): `mic_iterates_audio_blocks`, `gyro_counts_become_dps` (raw 1000 at Dps500 → `Dps(17.5)`), `accel_counts_become_g` (raw 16384 at G2 → ≈`G(0.9994)`), `drop_sends_off_once`, `busy_names_the_holding_link`. Implement, commit.
 
 ### Task api-05: real links
 
@@ -90,4 +90,4 @@ Raw counts become `G` / `Dps` with `AccelRange::g_per_count` / `GyroRange::dps_p
 
 **Produces:** `Usb::open()` (first serial port with USB vendor id `0x2886`); `Uart::port(&str) -> UartBuilder` with `.baud(Baud)` (default `Baud(UART_DEFAULT_BAUD)`) and `.open()`; `Ble::open()` (name `BLE_NAME`), `Ble::named(&str) -> BleBuilder` with `.attempts(u8)` (default 3) and `.open()`. BLE reconnect is one private function `retry<T>(attempts: u8, connect: impl FnMut() -> Result<T, Error>) -> Result<T, Error>` returning `Error::Timeout { attempts }` when all fail. BLE service: Nordic UART Service UUIDs (`6e400001-…` service, `…0002` write, `…0003` notify). Examples: `mic_usb.rs`, `gyro_ble.rs`, `imu_uart.rs`, `two_links.rs`, each the matching HLD snippet as a runnable `main`.
 
-- [ ] Tests: `api_2_retries_then_times_out` (connect fails 5 times with `attempts = 5` → called 5 times, `Timeout { attempts: 5 }`), `retry_stops_at_first_success`. Implement, `cargo build --examples -p xiao-api`, commit.
+- [x] Tests: `api_2_retries_then_times_out` (connect fails 5 times with `attempts = 5` → called 5 times, `Timeout { attempts: 5 }`), `retry_stops_at_first_success`. Implement, `cargo build --examples -p xiao-api`, commit.

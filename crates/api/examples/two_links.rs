@@ -1,4 +1,6 @@
 //! Two sensors on two links at once, and what "busy" looks like.
+//!
+//! Run with `cargo run -p xiao-api --example two_links`.
 
 use xiao_api::{Accel, Ble, Error, Mic, Usb};
 

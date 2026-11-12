@@ -1,4 +1,6 @@
 //! Both halves of the IMU over the UART pins.
+//!
+//! Run with `cargo run -p xiao-api --example imu_uart`.
 
 use xiao_api::{Baud, Error, Imu, Uart};
 

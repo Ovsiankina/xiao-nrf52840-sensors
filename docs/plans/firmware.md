@@ -26,6 +26,7 @@
 - `ImuOn` with neither half selected → treated as `ImuOff` (fw-01).
 - Chip does not answer WHO_AM_I 0x6A → error, no stream of zeros (fw-02).
 - A link's outgoing channel is full → the reading is dropped and the counter still advances, so the API sees the gap (fw-05).
+- What `xiao-api` (merged) relies on: a sensor's counter starts at 0 each time it goes on; when a link drops, the firmware frees that link's sensors; the reply to a command is `On`/`Off`/`Refused` for that sensor, sent before any reading; USB vendor id 0x2886; BLE name `BLE_NAME` with the Nordic UART Service (fw-04, fw-05, fw-06).
 
 ---
 
