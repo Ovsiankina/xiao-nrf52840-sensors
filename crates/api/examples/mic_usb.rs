@@ -11,7 +11,8 @@ fn main() -> Result<(), Error> {
     for block in &mic {
         let block = block?;
         let peak = block.samples().iter().map(|s| s.unsigned_abs()).max();
-        println!("{:?} peak {peak:?}, lost {:?}", block.rate(), mic.dropped());
+        // println!("{:?} peak {peak:?}, lost {:?}", block.rate(), mic.dropped());
+        println!("{:?} peak {peak:?}", block.rate());
     }
     Ok(())
 }
