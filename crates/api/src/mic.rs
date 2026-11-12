@@ -33,13 +33,16 @@ impl AudioBlock {
 
 /// The microphone, on. Iterate over `&mic` for audio; dropping it
 /// turns the microphone off (FW-6).
+///
+/// It keeps its link open: the link closes once the link value and every
+/// sensor on it are dropped.
 #[derive(Debug)]
-pub struct Mic<'l> {
-    connection: &'l Connection,
+pub struct Mic {
+    connection: Connection,
     stream: Stream<AudioBlock>,
 }
 
-impl<'l> Mic<'l> {
+impl Mic {
     /// Turns the microphone on over `link` (API-1).
     ///
     /// # Errors
@@ -47,7 +50,7 @@ impl<'l> Mic<'l> {
     /// [`Error::Busy`] when another link holds it, [`Error::TooSlow`]
     /// when audio does not fit this link, [`Error::Timeout`] when the
     /// board does not answer.
-    pub fn on(link: &'l impl AsLink) -> Result<Self, Error> {
+    pub fn on(link: &impl AsLink) -> Result<Self, Error> {
         let (connection, kind) = link::parts(link);
         let mut held = connection.held();
         if held.mic {
@@ -68,7 +71,7 @@ impl<'l> Mic<'l> {
             return Err(error);
         }
         held.mic = true;
-        Ok(Self { connection, stream: Stream::new(rx, audio) })
+        Ok(Self { connection: connection.share(), stream: Stream::new(rx, audio) })
     }
 
     /// The newest block, skipping any older ones not yet read (API-3).
@@ -78,6 +81,18 @@ impl<'l> Mic<'l> {
     /// [`Error::Disconnected`] when the link is gone.
     pub fn latest(&self) -> Result<AudioBlock, Error> {
         self.stream.latest()
+    }
+
+    /// The oldest block already here, `None` when none is waiting. Never
+    /// waits (API-3).
+    ///
+    /// # Errors
+    ///
+    /// Once, why the link ended: [`Error::Disconnected`] when it is gone,
+    /// [`Error::Timeout`] when BLE ran out of reconnect attempts. Then
+    /// `Ok(None)` for ever.
+    pub fn try_next(&self) -> Result<Option<AudioBlock>, Error> {
+        self.stream.try_next()
     }
 
     /// Blocks lost since the microphone was turned on (API-4).
@@ -92,7 +107,7 @@ impl<'l> Mic<'l> {
 // DECISION: `copy_iterator` allowed: the contract iterates over `&Mic`
 // (`for block in &mic`), and every shared reference is `Copy`.
 #[allow(clippy::copy_iterator, reason = "the contract's `for block in &mic`")]
-impl Iterator for &Mic<'_> {
+impl Iterator for &Mic {
     type Item = Result<AudioBlock, Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -100,7 +115,7 @@ impl Iterator for &Mic<'_> {
     }
 }
 
-impl Drop for Mic<'_> {
+impl Drop for Mic {
     fn drop(&mut self) {
         let mut held = self.connection.held();
         held.mic = false;
@@ -127,7 +142,7 @@ mod tests {
     use crate::link::{answered, memory_usb};
     use crate::{Dropped, Error};
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
     use xiao_proto::message::{AudioBlock, Command, Link, Message, Refusal, Sensor};
 
     const QUIET: Duration = Duration::from_millis(200);
@@ -211,6 +226,34 @@ mod tests {
         assert_eq!(board.command(QUIET), Some(Command::MicOn));
         assert_eq!(board.command(QUIET), Some(Command::MicOff), "the late On is undone");
         assert_eq!(board.command(QUIET), None);
+    }
+
+    #[test]
+    fn try_next_hands_blocks_out_in_order() {
+        let (usb, mut board) = memory_usb();
+        let mic = answered(&board, || Mic::on(&usb)).0.unwrap();
+
+        let start = Instant::now();
+        assert_eq!(mic.try_next().unwrap(), None);
+        assert!(start.elapsed() < Duration::from_millis(10), "waited {:?}", start.elapsed());
+
+        board.send(&block(0, 0));
+        board.send(&block(1, 100));
+        board.send(&block(3, 300));
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let mut firsts = Vec::new();
+        while firsts.len() < 3 {
+            if let Some(block) = mic.try_next().unwrap() {
+                firsts.push(block.samples()[0]);
+            } else {
+                assert!(Instant::now() < deadline, "only {firsts:?} arrived");
+                thread::sleep(Duration::from_millis(1));
+            }
+        }
+        assert_eq!(firsts, [0, 100, 300], "oldest first, none skipped");
+        assert_eq!(mic.try_next().unwrap(), None);
+        assert_eq!(mic.dropped(), Dropped(1), "block 2 was lost");
+        answered(&board, || drop(mic));
     }
 
     #[test]

@@ -5,8 +5,8 @@
 
 use crate::Error;
 use crate::link::lock;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard, TryLockError};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError};
 use std::time::{Duration, Instant};
 use xiao_proto::message::Message;
@@ -122,30 +122,69 @@ impl<T> Stream<T> {
     /// when none is waiting.
     pub(crate) fn latest(&self) -> Result<T, Error> {
         let mut state = lock(&self.state);
-        let mut newest = None;
-        loop {
-            match self.take(&mut state, false) {
-                Taken::Reading(reading) => newest = Some(reading),
-                Taken::Empty => break,
-                Taken::End(error) => match newest {
-                    // The reading came before the error: hand it out now,
-                    // the error on the next call.
-                    Some(_) => {
-                        state.held = Some(error);
-                        break;
-                    }
-                    None => return Err(error),
-                },
-                Taken::Over => return newest.ok_or(Error::Disconnected),
-            }
-        }
-        if let Some(reading) = newest {
+        if let Some(reading) = self.newest(&mut state)? {
             return Ok(reading);
         }
         match self.take(&mut state, true) {
             Taken::Reading(reading) => Ok(reading),
             Taken::End(error) => Err(error),
             Taken::Over | Taken::Empty => Err(Error::Disconnected),
+        }
+    }
+
+    /// The newest reading waiting, dropping older ones not yet read;
+    /// `None` when none is. Never waits: the stream's one `Err` once,
+    /// then `None` for ever.
+    pub(crate) fn try_latest(&self) -> Result<Option<T>, Error> {
+        match self.try_lock() {
+            Some(mut state) => self.newest(&mut state),
+            None => Ok(None),
+        }
+    }
+
+    /// The oldest reading waiting, `None` when none is. Never waits: the
+    /// stream's one `Err` once, then `None` for ever.
+    pub(crate) fn try_next(&self) -> Result<Option<T>, Error> {
+        let Some(mut state) = self.try_lock() else {
+            return Ok(None);
+        };
+        match self.take(&mut state, false) {
+            Taken::Reading(reading) => Ok(Some(reading)),
+            Taken::End(error) => Err(error),
+            Taken::Over | Taken::Empty => Ok(None),
+        }
+    }
+
+    // DECISION: the `try_` reads take the state with `try_lock`: while a
+    // blocking `next` or `latest` on another thread holds it, they return
+    // `Ok(None)` instead of waiting up to 2 s for that call to finish.
+    /// The state, unless another call holds it right now.
+    fn try_lock(&self) -> Option<MutexGuard<'_, State<T>>> {
+        match self.state.try_lock() {
+            Ok(state) => Some(state),
+            Err(TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+            Err(TryLockError::WouldBlock) => None,
+        }
+    }
+
+    /// Drains what is waiting and returns the newest reading, `None` when
+    /// nothing was. An error met after a reading is held for the next call.
+    fn newest(&self, state: &mut State<T>) -> Result<Option<T>, Error> {
+        let mut newest = None;
+        loop {
+            match self.take(state, false) {
+                Taken::Reading(reading) => newest = Some(reading),
+                Taken::Empty | Taken::Over => return Ok(newest),
+                Taken::End(error) => match newest {
+                    // The reading came before the error: hand it out now,
+                    // the error on the next call.
+                    Some(_) => {
+                        state.held = Some(error);
+                        return Ok(newest);
+                    }
+                    None => return Err(error),
+                },
+            }
         }
     }
 
@@ -360,5 +399,62 @@ mod tests {
         let (_tx, mut stream) = counters();
         stream.patience = Duration::from_millis(100);
         assert!(matches!(stream.latest(), Err(Error::Timeout { attempts: 1 })));
+    }
+
+    #[test]
+    fn try_latest_returns_the_newest_and_counts_the_skipped_as_read_not_dropped() {
+        let (tx, stream) = counters();
+        for counter in 0..4 {
+            tx.send(Ok(reading(counter))).unwrap();
+        }
+        assert_eq!(stream.try_latest().unwrap(), Some(3), "newest of 0..=3");
+        assert_eq!(stream.dropped(), Dropped(0), "0..=2 were read, not lost");
+        assert_eq!(stream.try_latest().unwrap(), None, "the skipped ones are gone");
+
+        // A real gap still counts.
+        tx.send(Ok(reading(6))).unwrap();
+        assert_eq!(stream.try_latest().unwrap(), Some(6));
+        assert_eq!(stream.dropped(), Dropped(2), "4 and 5 were lost");
+
+        // try_next takes the oldest, one at a time.
+        for counter in 7..9 {
+            tx.send(Ok(reading(counter))).unwrap();
+        }
+        assert_eq!(stream.try_next().unwrap(), Some(7));
+        assert_eq!(stream.try_next().unwrap(), Some(8));
+        assert_eq!(stream.try_next().unwrap(), None);
+    }
+
+    #[test]
+    fn try_latest_reports_a_dead_link_once_then_none() {
+        // A reading queued before the error: the reading now, then the
+        // error once, then nothing, never waiting.
+        let (tx, stream) = counters();
+        tx.send(Ok(reading(0))).unwrap();
+        tx.send(Ok(reading(1))).unwrap();
+        tx.send(Err(Error::Disconnected)).unwrap();
+        drop(tx);
+        assert_eq!(stream.try_latest().unwrap(), Some(1));
+        assert!(matches!(stream.try_latest(), Err(Error::Disconnected)));
+        let start = std::time::Instant::now();
+        for _ in 0..3 {
+            assert_eq!(stream.try_latest().unwrap(), None);
+            assert_eq!(stream.try_next().unwrap(), None);
+        }
+        assert!(start.elapsed() < Duration::from_millis(10), "an ended stream never waits");
+
+        // The channel just closes: one Disconnected, then nothing.
+        let (tx, stream) = counters();
+        drop(tx);
+        assert!(matches!(stream.try_latest(), Err(Error::Disconnected)));
+        assert_eq!(stream.try_latest().unwrap(), None);
+
+        // try_next meets the error in its turn, after the readings before it.
+        let (tx, stream) = counters();
+        tx.send(Ok(reading(0))).unwrap();
+        tx.send(Err(Error::Timeout { attempts: 3 })).unwrap();
+        assert_eq!(stream.try_next().unwrap(), Some(0));
+        assert!(matches!(stream.try_next(), Err(Error::Timeout { attempts: 3 })));
+        assert_eq!(stream.try_next().unwrap(), None);
     }
 }

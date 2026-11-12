@@ -4,6 +4,11 @@ description = "What the developer calls: pick the XIAO's sensors, configure them
 version.workspace = true
 edition.workspace = true
 
+[features]
+# `link::Fake`: a link to a board the test plays, for tests without a
+# XIAO, here and downstream. Adds no dependency.
+fake = []
+
 [dependencies]
 xiao-proto.workspace = true
 postcard = { workspace = true, features = ["use-std"] }

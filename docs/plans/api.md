@@ -91,3 +91,21 @@ Raw counts become `G` / `Dps` with `AccelRange::g_per_count` / `GyroRange::dps_p
 **Produces:** `Usb::open()` (first serial port with USB vendor id `0x2886`); `Uart::port(&str) -> UartBuilder` with `.baud(Baud)` (default `Baud(UART_DEFAULT_BAUD)`) and `.open()`; `Ble::open()` (name `BLE_NAME`), `Ble::named(&str) -> BleBuilder` with `.attempts(u8)` (default 3) and `.open()`. BLE reconnect is one private function `retry<T>(attempts: u8, connect: impl FnMut() -> Result<T, Error>) -> Result<T, Error>` returning `Error::Timeout { attempts }` when all fail. BLE service: Nordic UART Service UUIDs (`6e400001-…` service, `…0002` write, `…0003` notify). Examples: `mic_usb.rs`, `gyro_ble.rs`, `imu_uart.rs`, `two_links.rs`, each the matching HLD snippet as a runnable `main`.
 
 - [x] Tests: `api_2_retries_then_times_out` (connect fails 5 times with `attempts = 5` → called 5 times, `Timeout { attempts: 5 }`), `retry_stops_at_first_success`. Implement, `cargo build --examples -p xiao-api`, commit.
+
+---
+
+## Change: real-time callers (2026-11-12)
+
+Contract change the owner approved on 2026-11-12, for the kmr XIAO
+adapter (`kmr_v3/docs/plans/xiao-adapter.md`, Phase A). Branch
+`mod/api-realtime`.
+
+- [x] X01: `try_latest()` on `Imu`, `Gyro`, `Accel`, `try_next()` on
+  `Mic`; neither waits (API-3).
+- [x] X02: sensors hold a shared link handle; `Mic`, `Gyro`, `Accel`,
+  `Imu` lose `'l`, `on(&impl AsLink)` is unchanged. Closes the first
+  `[question]` in `docs/deferred.md`.
+- [x] X03: feature `fake` (no dependency): `link::Fake` (`usb()`,
+  `uart(Baud)`) and `link::Board` (`auto_answer`, `refuse_next`,
+  `send`, `commands`, `unplug`) on the in-memory transport;
+  `xiao_api::proto` re-exports `xiao-proto` to build their messages.

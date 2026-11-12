@@ -5,10 +5,16 @@
 //! Depends on: `xiao-proto::frame`, `error`.
 
 pub mod ble;
+#[cfg(any(test, feature = "fake"))]
+mod fake;
 pub mod uart;
 pub mod usb;
 
 pub use ble::{Ble, BleBuilder};
+// DECISION: `fake` stays a private module and only `Fake` and `Board` are
+// re-exported, the two items X03 names; the crate's own tests get them too.
+#[cfg(any(test, feature = "fake"))]
+pub use fake::{Board, Fake};
 pub use uart::{Uart, UartBuilder};
 pub use usb::Usb;
 
@@ -87,9 +93,19 @@ pub(crate) fn open_serial(path: &str, baud: Baud) -> Result<Connection, Error> {
 }
 
 /// The shared inside of every link: sends commands, routes what comes
-/// back to the sensor it belongs to.
+/// back to the sensor it belongs to. The link value and every sensor on
+/// it hold one handle each; the link closes when the last one goes.
+// DECISION: a handle around an `Arc`, cloned by the private `share` and not
+// by a `Clone` impl (a new trait impl on a pub type), so the links keep
+// their field and `AsLink` its signature.
 #[derive(Debug)]
 pub struct Connection {
+    inner: Arc<Inner>,
+}
+
+/// What every handle to one [`Connection`] shares.
+#[derive(Debug)]
+struct Inner {
     writer: Mutex<Writer>,
     shared: Arc<Shared>,
     held: Mutex<Held>,
@@ -109,7 +125,8 @@ pub(crate) struct Held {
 #[derive(Debug, Default)]
 struct Shared {
     routes: Mutex<Routes>,
-    /// Set when the `Connection` is dropped; the reader thread then ends.
+    /// Set when the last `Connection` handle is dropped; the reader thread
+    /// then ends.
     closed: AtomicBool,
 }
 
@@ -141,7 +158,8 @@ impl std::fmt::Debug for Writer {
     }
 }
 
-/// Tells the reader thread to end when the [`Connection`] goes.
+/// Tells the reader thread to end when the last handle to the
+/// [`Connection`] goes.
 // DECISION: the stop signal lives in a private field's Drop, not in
 // `impl Drop for Connection`, which would be a new trait impl on a pub type.
 #[derive(Debug)]
@@ -165,12 +183,19 @@ impl Connection {
         thread::Builder::new()
             .name("xiao-link-reader".into())
             .spawn(move || read_loop(reader, &for_thread))?;
-        Ok(Self {
+        let inner = Inner {
             writer: Mutex::new(Writer(transport)),
             held: Mutex::new(Held { mic: false, imu: ImuConfig { accel: None, gyro: None } }),
             _stop: StopOnDrop(Arc::clone(&shared)),
             shared,
-        })
+        };
+        Ok(Self { inner: Arc::new(inner) })
+    }
+
+    /// Another handle to this connection, for a sensor turned on over it:
+    /// the link stays open while the sensor lives.
+    pub(crate) fn share(&self) -> Self {
+        Self { inner: Arc::clone(&self.inner) }
     }
 
     /// Sends `cmd` and waits up to 2 s for the board's answer.
@@ -184,8 +209,9 @@ impl Connection {
     pub(crate) fn request(&self, cmd: Command) -> Result<(), Error> {
         let (sensor, wants_on) = target(cmd);
         let (tx, rx) = mpsc::channel();
+        let shared = &self.inner.shared;
         {
-            let mut routes = lock(&self.shared.routes);
+            let mut routes = lock(&shared.routes);
             if let Some(cause) = &routes.dead {
                 return Err(again(cause));
             }
@@ -193,7 +219,7 @@ impl Connection {
         }
 
         if let Err(error) = self.write(cmd) {
-            lock(&self.shared.routes).replies[slot(sensor)] = None;
+            lock(&shared.routes).replies[slot(sensor)] = None;
             return Err(error);
         }
 
@@ -201,14 +227,14 @@ impl Connection {
             Ok(Ok(())) => Ok(()),
             Ok(Err(refusal)) => Err(refused(refusal)),
             Err(RecvTimeoutError::Timeout) => {
-                lock(&self.shared.routes).replies[slot(sensor)] = None;
+                lock(&shared.routes).replies[slot(sensor)] = None;
                 // DECISION: one unanswered command counts as one attempt;
                 // `attempts` > 1 only comes from the BLE reconnect (api-05).
                 Err(Error::Timeout { attempts: 1 })
             }
             // The reader ended and dropped the reply sender: say why.
             Err(RecvTimeoutError::Disconnected) => {
-                Err(lock(&self.shared.routes).dead.as_ref().map_or(Error::Disconnected, again))
+                Err(lock(&shared.routes).dead.as_ref().map_or(Error::Disconnected, again))
             }
         }
     }
@@ -227,27 +253,28 @@ impl Connection {
     /// `Err(Error::Disconnected)` when the link is gone. Every subscriber
     /// of a sensor gets every reading; dropping the receiver unsubscribes.
     pub(crate) fn subscribe(&self, sensor: Sensor) -> Receiver<Result<Message, Error>> {
-        lock(&self.shared.routes).add(sensor)
+        lock(&self.inner.shared.routes).add(sensor)
     }
 
     /// What the sensor values on this link hold. Kept locked across a
     /// whole on or off, so two of them never compute a command from the
     /// same stale state.
     pub(crate) fn held(&self) -> MutexGuard<'_, Held> {
-        lock(&self.held)
+        lock(&self.inner.held)
     }
 
     fn write(&self, cmd: Command) -> Result<(), Error> {
         let mut buf = [0; MAX_FRAME];
         let bytes = frame::encode(&cmd, &mut buf)
             .map_err(|_| Error::Io(io::Error::other("command does not fit one frame")))?;
-        lock(&self.writer).0.write(bytes)?;
+        lock(&self.inner.writer).0.write(bytes)?;
         Ok(())
     }
 }
 
 /// The reader thread: decodes frames and routes each message until the
-/// link dies or the [`Connection`] is dropped, then ends every route.
+/// link dies or the last [`Connection`] handle is dropped, then ends
+/// every route.
 fn read_loop(mut transport: Box<dyn Transport>, shared: &Shared) {
     let mut decoder = Decoder::new();
     let mut buf = [0; MAX_FRAME];
@@ -409,15 +436,15 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 /// One end of an in-memory link: what one end writes, the other reads.
-#[cfg(test)]
-#[derive(Clone)]
+#[cfg(any(test, feature = "fake"))]
+#[derive(Debug, Clone)]
 pub(crate) struct Memory {
     tx: Sender<u8>,
     rx: Arc<Mutex<Receiver<u8>>>,
 }
 
 /// Two connected in-memory ends: (API side, board side).
-#[cfg(test)]
+#[cfg(any(test, feature = "fake"))]
 pub(crate) fn memory_pair() -> (Memory, Memory) {
     let (to_board, board_rx) = mpsc::channel();
     let (to_api, api_rx) = mpsc::channel();
@@ -435,7 +462,7 @@ pub(crate) fn memory_usb() -> (Usb, Memory) {
     (Usb { connection }, board)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fake"))]
 impl Transport for Memory {
     fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
         for &byte in bytes {
@@ -486,16 +513,25 @@ impl Memory {
     /// returns it; `None` after `wait` of silence.
     pub(crate) fn reply(&mut self, wait: Duration) -> Option<Command> {
         let command = self.command(wait)?;
-        let answer = match command {
-            Command::MicOn => Message::On(Sensor::Mic),
-            Command::MicOff => Message::Off(Sensor::Mic),
-            Command::ImuOff | Command::ImuOn(ImuConfig { accel: None, gyro: None }) => {
-                Message::Off(Sensor::Imu)
-            }
-            Command::ImuOn(_) => Message::On(Sensor::Imu),
-        };
-        self.send(&answer);
+        self.send(&fake::reply_to(command));
         Some(command)
+    }
+
+    /// Whether the API end goes away within `wait`, skipping what it still
+    /// sends: true once every handle to its connection is dropped.
+    pub(crate) fn closed(&self, wait: Duration) -> bool {
+        let deadline = std::time::Instant::now() + wait;
+        let rx = lock(&self.rx);
+        loop {
+            let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) else {
+                return false;
+            };
+            match rx.recv_timeout(left) {
+                Ok(_) => {}
+                Err(RecvTimeoutError::Timeout) => return false,
+                Err(RecvTimeoutError::Disconnected) => return true,
+            }
+        }
     }
 
     /// The next command the API sent, or `None` after `wait` of silence.
@@ -575,12 +611,13 @@ impl AsLink for Uart {}
 mod tests {
     use super::sealed::Sealed;
     use super::{
-        AsLink, Baud, BytesPerSec, Connection, Memory, QUEUE, Shared, Uart, lock, memory_pair,
-        memory_usb, open_serial, route,
+        AsLink, Baud, BytesPerSec, Connection, Memory, QUEUE, Shared, Uart, answered, lock,
+        memory_pair, memory_usb, open_serial, route,
     };
     use crate::Dropped;
     use crate::Error;
     use crate::stream::Stream;
+    use crate::{Gyro, Mic};
     use std::thread;
     use std::time::{Duration, Instant};
     use xiao_proto::message::{AudioBlock, Command, ImuReading, Link, Message, Refusal, Sensor};
@@ -704,6 +741,20 @@ mod tests {
         let first = mic.recv_timeout(Duration::from_secs(1)).unwrap();
         assert!(matches!(first, Err(Error::Disconnected)), "{first:?}");
         assert!(mic.recv_timeout(Duration::from_secs(1)).is_err());
+    }
+
+    #[test]
+    fn the_link_closes_when_the_last_holder_drops() {
+        let (usb, board) = memory_usb();
+        let gyro = answered(&board, || Gyro::on(&usb)).0.unwrap();
+        let mic = answered(&board, || Mic::on(&usb)).0.unwrap();
+
+        drop(usb);
+        assert!(!board.closed(QUIET), "the sensors keep the link open");
+        answered(&board, || drop(gyro));
+        assert!(!board.closed(QUIET), "the mic still holds it");
+        answered(&board, || drop(mic));
+        assert!(board.closed(Duration::from_secs(1)), "closed with its last holder");
     }
 
     #[test]

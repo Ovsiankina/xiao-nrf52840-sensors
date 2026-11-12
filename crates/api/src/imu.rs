@@ -53,13 +53,16 @@ pub struct Motion {
 
 /// The gyroscope, on. Iterate over `&gyro` for readings; dropping it
 /// turns the gyroscope off (FW-6).
+///
+/// It keeps its link open: the link closes once the link value and every
+/// sensor on it are dropped.
 #[derive(Debug)]
-pub struct Gyro<'l> {
-    connection: &'l Connection,
+pub struct Gyro {
+    connection: Connection,
     stream: Stream<Rotation>,
 }
 
-impl<'l> Gyro<'l> {
+impl Gyro {
     /// Turns the gyroscope on over `link` with the default settings:
     /// 104 Hz, smallest range (API-1).
     ///
@@ -68,7 +71,7 @@ impl<'l> Gyro<'l> {
     /// [`Error::Busy`] when another link holds the IMU (FW-1, FW-2),
     /// [`Error::TooSlow`] when the stream does not fit this link,
     /// [`Error::Timeout`] when the board does not answer.
-    pub fn on(link: &'l impl AsLink) -> Result<Self, Error> {
+    pub fn on(link: &impl AsLink) -> Result<Self, Error> {
         GyroBuilder::DEFAULT.on(link)
     }
 
@@ -91,6 +94,18 @@ impl<'l> Gyro<'l> {
         self.stream.latest()
     }
 
+    /// The newest reading already here, skipping older ones not yet read;
+    /// `None` when none came since the last read. Never waits (API-3).
+    ///
+    /// # Errors
+    ///
+    /// Once, why the link ended: [`Error::Disconnected`] when it is gone,
+    /// [`Error::Timeout`] when BLE ran out of reconnect attempts. Then
+    /// `Ok(None)` for ever.
+    pub fn try_latest(&self) -> Result<Option<Rotation>, Error> {
+        self.stream.try_latest()
+    }
+
     /// Readings lost since it was turned on (API-4).
     #[must_use]
     pub fn dropped(&self) -> Dropped {
@@ -103,7 +118,7 @@ impl<'l> Gyro<'l> {
 // DECISION: `copy_iterator` allowed: the contract iterates over `&gyro`
 // (`for r in &gyro`), and every shared reference is `Copy`.
 #[allow(clippy::copy_iterator, reason = "the contract's `for r in &sensor`")]
-impl Iterator for &Gyro<'_> {
+impl Iterator for &Gyro {
     type Item = Result<Rotation, Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -111,9 +126,9 @@ impl Iterator for &Gyro<'_> {
     }
 }
 
-impl Drop for Gyro<'_> {
+impl Drop for Gyro {
     fn drop(&mut self) {
-        release(self.connection, Halves { accel: false, gyro: true });
+        release(&self.connection, Halves { accel: false, gyro: true });
     }
 }
 
@@ -147,7 +162,7 @@ impl GyroBuilder {
     /// # Errors
     ///
     /// Same as [`Gyro::on`].
-    pub fn on(self, link: &impl AsLink) -> Result<Gyro<'_>, Error> {
+    pub fn on(self, link: &impl AsLink) -> Result<Gyro, Error> {
         let range = self.config.range;
         let want = ImuConfig { accel: None, gyro: Some(self.config) };
         let (connection, stream) =
@@ -158,13 +173,16 @@ impl GyroBuilder {
 
 /// The accelerometer, on. Iterate over `&accel` for readings; dropping it
 /// turns the accelerometer off (FW-6).
+///
+/// It keeps its link open: the link closes once the link value and every
+/// sensor on it are dropped.
 #[derive(Debug)]
-pub struct Accel<'l> {
-    connection: &'l Connection,
+pub struct Accel {
+    connection: Connection,
     stream: Stream<Acceleration>,
 }
 
-impl<'l> Accel<'l> {
+impl Accel {
     /// Turns the accelerometer on over `link` with the default settings:
     /// 104 Hz, smallest range (API-1).
     ///
@@ -173,7 +191,7 @@ impl<'l> Accel<'l> {
     /// [`Error::Busy`] when another link holds the IMU (FW-1, FW-2),
     /// [`Error::TooSlow`] when the stream does not fit this link,
     /// [`Error::Timeout`] when the board does not answer.
-    pub fn on(link: &'l impl AsLink) -> Result<Self, Error> {
+    pub fn on(link: &impl AsLink) -> Result<Self, Error> {
         AccelBuilder::DEFAULT.on(link)
     }
 
@@ -196,6 +214,16 @@ impl<'l> Accel<'l> {
         self.stream.latest()
     }
 
+    /// The newest reading already here, skipping older ones not yet read;
+    /// `None` when none came since the last read. Never waits (API-3).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Gyro::try_latest`].
+    pub fn try_latest(&self) -> Result<Option<Acceleration>, Error> {
+        self.stream.try_latest()
+    }
+
     /// Readings lost since it was turned on (API-4).
     #[must_use]
     pub fn dropped(&self) -> Dropped {
@@ -206,7 +234,7 @@ impl<'l> Accel<'l> {
 /// Every reading in order, waiting for the next one (API-3). Ends after
 /// one `Err` when the link is gone.
 #[allow(clippy::copy_iterator, reason = "the contract's `for r in &sensor`")]
-impl Iterator for &Accel<'_> {
+impl Iterator for &Accel {
     type Item = Result<Acceleration, Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -214,9 +242,9 @@ impl Iterator for &Accel<'_> {
     }
 }
 
-impl Drop for Accel<'_> {
+impl Drop for Accel {
     fn drop(&mut self) {
-        release(self.connection, Halves { accel: true, gyro: false });
+        release(&self.connection, Halves { accel: true, gyro: false });
     }
 }
 
@@ -247,7 +275,7 @@ impl AccelBuilder {
     /// # Errors
     ///
     /// Same as [`Accel::on`].
-    pub fn on(self, link: &impl AsLink) -> Result<Accel<'_>, Error> {
+    pub fn on(self, link: &impl AsLink) -> Result<Accel, Error> {
         let range = self.config.range;
         let want = ImuConfig { accel: Some(self.config), gyro: None };
         let (connection, stream) =
@@ -258,13 +286,16 @@ impl AccelBuilder {
 
 /// Both halves of the IMU, on. Iterate over `&imu` for readings; dropping it
 /// turns the whole IMU off (FW-6).
+///
+/// It keeps its link open: the link closes once the link value and every
+/// sensor on it are dropped.
 #[derive(Debug)]
-pub struct Imu<'l> {
-    connection: &'l Connection,
+pub struct Imu {
+    connection: Connection,
     stream: Stream<Motion>,
 }
 
-impl<'l> Imu<'l> {
+impl Imu {
     /// Turns both halves of the IMU on over `link` with the default settings:
     /// 104 Hz, smallest range (API-1).
     ///
@@ -273,7 +304,7 @@ impl<'l> Imu<'l> {
     /// [`Error::Busy`] when another link holds the IMU (FW-1, FW-2),
     /// [`Error::TooSlow`] when the stream does not fit this link,
     /// [`Error::Timeout`] when the board does not answer.
-    pub fn on(link: &'l impl AsLink) -> Result<Self, Error> {
+    pub fn on(link: &impl AsLink) -> Result<Self, Error> {
         ImuBuilder::DEFAULT.on(link)
     }
 
@@ -301,6 +332,16 @@ impl<'l> Imu<'l> {
         self.stream.latest()
     }
 
+    /// The newest reading already here, skipping older ones not yet read;
+    /// `None` when none came since the last read. Never waits (API-3).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Gyro::try_latest`].
+    pub fn try_latest(&self) -> Result<Option<Motion>, Error> {
+        self.stream.try_latest()
+    }
+
     /// Readings lost since it was turned on (API-4).
     #[must_use]
     pub fn dropped(&self) -> Dropped {
@@ -311,7 +352,7 @@ impl<'l> Imu<'l> {
 /// Every reading in order, waiting for the next one (API-3). Ends after
 /// one `Err` when the link is gone.
 #[allow(clippy::copy_iterator, reason = "the contract's `for r in &sensor`")]
-impl Iterator for &Imu<'_> {
+impl Iterator for &Imu {
     type Item = Result<Motion, Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -319,9 +360,9 @@ impl Iterator for &Imu<'_> {
     }
 }
 
-impl Drop for Imu<'_> {
+impl Drop for Imu {
     fn drop(&mut self) {
-        release(self.connection, Halves { accel: true, gyro: true });
+        release(&self.connection, Halves { accel: true, gyro: true });
     }
 }
 
@@ -359,7 +400,7 @@ impl ImuBuilder {
     /// # Errors
     ///
     /// Same as [`Imu::on`].
-    pub fn on(self, link: &impl AsLink) -> Result<Imu<'_>, Error> {
+    pub fn on(self, link: &impl AsLink) -> Result<Imu, Error> {
         let (accel_range, gyro_range) = (self.accel.range, self.gyro.range);
         let want = ImuConfig { accel: Some(self.accel), gyro: Some(self.gyro) };
         let (connection, stream) = claim(link, want, move |reading| {
@@ -391,7 +432,7 @@ fn claim<T>(
     link: &impl AsLink,
     want: ImuConfig,
     convert: impl Fn(ImuReading) -> Option<T> + Send + 'static,
-) -> Result<(&Connection, Stream<T>), Error> {
+) -> Result<(Connection, Stream<T>), Error> {
     let (connection, kind) = link::parts(link);
     let mut held = connection.held();
     let has = held.imu;
@@ -413,7 +454,7 @@ fn claim<T>(
     }
     held.imu = config;
     let joining = has.accel.is_some() || has.gyro.is_some();
-    Ok((connection, stream(rx, joining, convert)))
+    Ok((connection.share(), stream(rx, joining, convert)))
 }
 
 fn stream<T>(
@@ -469,8 +510,9 @@ fn rotation(raw: [i16; 3], range: GyroRange) -> Rotation {
 mod tests {
     use super::{Accel, Acceleration, Dps, G, Gyro, Imu, Rotation};
     use crate::link::{Memory, answered, memory_usb};
-    use crate::{Dropped, Error};
-    use std::time::Duration;
+    use crate::{Dropped, Error, Mic, Usb};
+    use std::thread;
+    use std::time::{Duration, Instant};
     use xiao_proto::message::{
         AccelConfig, AccelRange, Command, GyroConfig, GyroRange, ImuConfig, ImuReading, Link,
         Message, Rate,
@@ -613,10 +655,96 @@ mod tests {
     fn sensors_are_send_and_sync() {
         // The contract stubs' sensors had every auto trait; the filled ones keep them.
         fn check<T: Send + Sync + std::panic::UnwindSafe + std::panic::RefUnwindSafe>() {}
-        check::<crate::Mic<'static>>();
-        check::<Gyro<'static>>();
-        check::<Accel<'static>>();
-        check::<Imu<'static>>();
+        check::<crate::Mic>();
+        check::<Gyro>();
+        check::<Accel>();
+        check::<Imu>();
+    }
+
+    /// Runs `act`, which must return in under 10 ms.
+    fn at_once<T>(act: impl FnOnce() -> T) -> T {
+        let start = Instant::now();
+        let result = act();
+        assert!(start.elapsed() < Duration::from_millis(10), "waited {:?}", start.elapsed());
+        result
+    }
+
+    /// Polls `try_latest` until a reading is there, for up to 1 s.
+    fn arrived<T>(mut try_latest: impl FnMut() -> Result<Option<T>, Error>) -> T {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            if let Some(reading) = try_latest().unwrap() {
+                return reading;
+            }
+            assert!(Instant::now() < deadline, "no reading arrived");
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn try_latest_is_none_when_nothing_is_queued() {
+        let (usb, mut board) = memory_usb();
+
+        let gyro = answered(&board, || Gyro::on(&usb)).0.unwrap();
+        assert_eq!(at_once(|| gyro.try_latest()).unwrap(), None);
+        send(&mut board, 0, None, Some([1000, 0, 0]));
+        assert!(close(arrived(|| gyro.try_latest()).x.0, 8.75));
+        assert_eq!(at_once(|| gyro.try_latest()).unwrap(), None, "handed out once");
+        answered(&board, || drop(gyro));
+
+        let accel = answered(&board, || Accel::on(&usb)).0.unwrap();
+        assert_eq!(at_once(|| accel.try_latest()).unwrap(), None);
+        send(&mut board, 0, Some([16384, 0, 0]), None);
+        assert!(close(arrived(|| accel.try_latest()).x.0, 0.9994));
+        answered(&board, || drop(accel));
+
+        let imu = answered(&board, || Imu::on(&usb)).0.unwrap();
+        assert_eq!(at_once(|| imu.try_latest()).unwrap(), None);
+        send(&mut board, 0, Some([16384, 0, 0]), Some([1000, 0, 0]));
+        let motion = arrived(|| imu.try_latest());
+        assert!(close(motion.gyro.x.0, 8.75), "{motion:?}");
+        answered(&board, || drop(imu));
+    }
+
+    #[test]
+    fn a_sensor_outlives_its_link_value() {
+        let (usb, mut board) = memory_usb();
+        let gyro = answered(&board, || Gyro::on(&usb)).0.unwrap();
+        drop(usb);
+
+        send(&mut board, 0, None, Some([1000, 0, 0]));
+        assert!(close(gyro.latest().unwrap().x.0, 8.75), "still reads");
+        let ((), command) = answered(&board, || drop(gyro));
+        assert_eq!(command, Command::ImuOff, "and still turns the gyroscope off");
+    }
+
+    #[test]
+    fn a_sensor_and_its_link_fit_in_one_struct() {
+        struct Rig {
+            usb: Usb,
+            gyro: Gyro,
+            mic: Mic,
+        }
+
+        // Configured, turned on and returned with its link: no borrow left.
+        fn set_up() -> (Rig, Memory) {
+            let (usb, board) = memory_usb();
+            let configured = || Gyro::rate(Rate::Hz208).range(GyroRange::Dps500).on(&usb);
+            let gyro = answered(&board, configured).0.unwrap();
+            let mic = answered(&board, || Mic::on(&usb)).0.unwrap();
+            (Rig { usb, gyro, mic }, board)
+        }
+
+        let (rig, mut board) = set_up();
+        send(&mut board, 0, None, Some([1000, 0, 0]));
+        assert!(close(rig.gyro.latest().unwrap().x.0, 17.5));
+        let again = Gyro::on(&rig.usb);
+        assert!(matches!(again, Err(Error::Busy { held_by: Link::Usb })), "{again:?}");
+
+        let Rig { usb, gyro, mic } = rig;
+        drop(usb);
+        answered(&board, || drop(gyro));
+        answered(&board, || drop(mic));
     }
 
     #[test]

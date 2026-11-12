@@ -12,6 +12,9 @@
 //! # Ok::<(), xiao_api::Error>(())
 //! ```
 //!
+//! Feature `fake`: `link::Fake`, a link to a board the test plays, for
+//! tests without a XIAO.
+//!
 //! Depends on: `xiao-proto`.
 
 pub mod error;
@@ -26,3 +29,7 @@ pub use link::{Baud, Ble, BytesPerSec, Uart, Usb};
 pub use mic::{AudioBlock, Hertz, Mic};
 pub use stream::Dropped;
 pub use xiao_proto::message::{AccelRange, GyroRange, Link, Rate};
+/// The messages a [`link::Board`] sends and the commands it sees
+/// (feature `fake`).
+#[cfg(feature = "fake")]
+pub use xiao_proto as proto;

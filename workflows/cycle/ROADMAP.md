@@ -48,7 +48,7 @@ overrides `QA.md`. Start a project, or an adoption, on `poc`; move to
 |---|---|---|---|---|
 | _example_ | mine · delegated | 1–10 · `needs contract rework` | `mod/<name>` | `2026-10-29 green` |
 | proto | delegated | 8 | `mod/proto` | `2026-11-12 green` |
-| api | delegated | 8 | `mod/api` | `2026-11-12 green` |
+| api | delegated | 8 | `mod/api`, change `mod/api-realtime` | `2026-11-12 green` (with `--features fake`) |
 | firmware | delegated | 5 | | |
 
 - **owner** `delegated`: an agent builds it in a `/goal` loop under the
