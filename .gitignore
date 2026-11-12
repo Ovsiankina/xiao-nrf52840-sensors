@@ -27,3 +27,14 @@ rustc-ice-*.txt
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+# Agentic workflow (ov-agentic-workflow): local tooling, not part of the project
+/CLAUDE.md
+/.claude/
+/workflows/
+/docs/plans/
+/docs/deferred.md
+/docs/learnings.md
+/docs/preferences.md
+# Structurizr local cache and logs
+/docs/.structurizr/
