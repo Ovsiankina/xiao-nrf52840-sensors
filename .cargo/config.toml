@@ -1,0 +1,4 @@
+# No [build] target: `cargo test --workspace` runs on the host.
+# The firmware is built for the board by scripts/flash.sh.
+[target.thumbv7em-none-eabihf]
+rustflags = ["-C", "link-arg=-Tlink.x", "-C", "link-arg=--nmagic"]

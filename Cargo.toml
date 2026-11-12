@@ -1,0 +1,43 @@
+[workspace]
+resolver = "3"
+members = ["crates/proto", "crates/api", "crates/firmware"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+xiao-proto = { path = "crates/proto" }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+postcard = { version = "1.1", default-features = false }
+heapless = { version = "0.9", features = ["serde"] }
+
+# Small and fast firmware; the host crates do not care.
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[workspace.lints.rust]
+# Agents may not add `unsafe` (CLAUDE.md). Warn, not forbid: the owner
+# may need it in a hot path and decides per site.
+unsafe_code = "warn"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+# No mod.rs. A module is `foo.rs` with its children in `foo/`.
+mod_module_files = "deny"
+self_named_module_files = "allow"
+
+# The step-4 contract leaves `todo!()` bodies. "Clippy clean" (QA.md)
+# therefore also means: no stub left behind at step 6.
+todo = "warn"
+unimplemented = "warn"
+dbg_macro = "warn"
+
+# Pedantic on, at lower priority so the lines above win.
+pedantic = { level = "warn", priority = -1 }
+# Pedantic items that fight the contract style.
+module_name_repetitions = "allow"
+must_use_candidate = "allow"

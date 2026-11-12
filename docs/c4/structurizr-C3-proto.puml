@@ -1,0 +1,88 @@
+@startuml
+title <size:24>Component View: xiao-nrf52840-sensors - Proto</size>
+
+set separator none
+left to right direction
+skinparam ranksep 20
+skinparam nodesep 5
+hide stereotype
+
+<style>
+  root {
+    BackgroundColor: #ffffff;
+    FontColor: #444444;
+  }
+  // Element,Component
+  .Element-RWxlbWVudCxDb21wb25lbnQ= {
+    BackgroundColor: #85bbf0;
+    LineColor: #5d82a8;
+    LineStyle: 0;
+    LineThickness: 2;
+    FontColor: #000000;
+    FontSize: 24;
+    HorizontalAlignment: center;
+    Shadowing: 0;
+    MaximumWidth: 450;
+  }
+  // Element,Container
+  .Element-RWxlbWVudCxDb250YWluZXI= {
+    BackgroundColor: #438dd5;
+    LineColor: #2e6295;
+    LineStyle: 0;
+    LineThickness: 2;
+    FontColor: #ffffff;
+    FontSize: 24;
+    HorizontalAlignment: center;
+    Shadowing: 0;
+    MaximumWidth: 450;
+  }
+  // Relationship
+  .Relationship-UmVsYXRpb25zaGlw {
+    LineThickness: 2;
+    LineStyle: 10-10;
+    LineColor: #444444;
+    FontColor: #444444;
+    FontSize: 24;
+    MaximumWidth: 200;
+  }
+  // Proto
+  .Boundary-UHJvdG8= {
+    BackgroundColor: #ffffff;
+    LineColor: #2e6295;
+    LineStyle: 0;
+    LineThickness: 2;
+    FontColor: #0b4884;
+    FontSize: 24;
+    HorizontalAlignment: center;
+    Shadowing: 0;
+  }
+  // xiao-nrf52840-sensors
+  .Boundary-eGlhby1ucmY1Mjg0MC1zZW5zb3Jz {
+    BackgroundColor: #ffffff;
+    LineColor: #0b4884;
+    LineStyle: 0;
+    LineThickness: 2;
+    FontColor: #0b4884;
+    FontSize: 24;
+    HorizontalAlignment: center;
+    Shadowing: 0;
+  }
+</style>
+
+rectangle "xiao-nrf52840-sensors\n<size:16>[Software System]</size>" <<Boundary-eGlhby1ucmY1Mjg0MC1zZW5zb3Jz>> {
+  rectangle "Proto\n<size:16>[Container: Rust library, no_std (crates/proto)]</size>" <<Boundary-UHJvdG8=>> {
+    rectangle "==message\n<size:16>[Component]</size>\n\nCommands, replies, readings, and the names both sides use." <<Element-RWxlbWVudCxDb21wb25lbnQ=>> as xiaonrf52840sensors.Proto.message
+    rectangle "==frame\n<size:16>[Component]</size>\n\nTurns a message into bytes on a link and back." <<Element-RWxlbWVudCxDb21wb25lbnQ=>> as xiaonrf52840sensors.Proto.frame
+  }
+
+  rectangle "==Firmware\n<size:16>[Container: Rust binary, no_std, flashed with scripts/flash.sh (crates/firmware)]</size>\n\nRuns on the XIAO; powers and reads the sensors the API asks for, sends the readings back." <<Element-RWxlbWVudCxDb250YWluZXI=>> as xiaonrf52840sensors.Firmware
+  rectangle "==API\n<size:16>[Container: Rust library, runs off the board (crates/api)]</size>\n\nWhat the developer calls: pick sensors, configure them, read them. Talks to the firmware." <<Element-RWxlbWVudCxDb250YWluZXI=>> as xiaonrf52840sensors.API
+}
+
+xiaonrf52840sensors.API --> xiaonrf52840sensors.Firmware <<Relationship-UmVsYXRpb25zaGlw>> : "Sends commands, receives readings\n<size:16>[USB, BLE, UART]</size>"
+xiaonrf52840sensors.API --> xiaonrf52840sensors.Proto.frame <<Relationship-UmVsYXRpb25zaGlw>> : "Encodes and decodes with"
+xiaonrf52840sensors.Firmware --> xiaonrf52840sensors.Proto.frame <<Relationship-UmVsYXRpb25zaGlw>> : "Encodes and decodes with"
+xiaonrf52840sensors.Firmware --> xiaonrf52840sensors.Proto.message <<Relationship-UmVsYXRpb25zaGlw>> : "Uses names from"
+xiaonrf52840sensors.Proto.frame --> xiaonrf52840sensors.Proto.message <<Relationship-UmVsYXRpb25zaGlw>> : "Encodes"
+
+@enduml

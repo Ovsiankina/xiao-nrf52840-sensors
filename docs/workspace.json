@@ -1,0 +1,203 @@
+{
+  "configuration" : { },
+  "description" : "A firmware for the Seeed XIAO nRF52840 Sense plus a small Rust API that talks to it, so a developer can switch on and read the board's motion and sound sensors without writing embedded code.",
+  "documentation" : { },
+  "id" : 1,
+  "lastModifiedDate" : "2026-11-12T09:58:33Z",
+  "model" : {
+    "people" : [ {
+      "description" : "Writes a program that uses the XIAO's sensors.",
+      "id" : "1",
+      "name" : "Developer",
+      "properties" : {
+        "structurizr.dsl.identifier" : "dev"
+      },
+      "relationships" : [ {
+        "description" : "Picks sensors, reads them",
+        "destinationId" : "2",
+        "id" : "6",
+        "sourceId" : "1",
+        "tags" : "Relationship"
+      }, {
+        "description" : "Picks sensors, reads them",
+        "destinationId" : "3",
+        "id" : "8",
+        "sourceId" : "1",
+        "tags" : "Relationship"
+      } ],
+      "tags" : "Element,Person"
+    } ],
+    "softwareSystems" : [ {
+      "containers" : [ {
+        "description" : "What the developer calls: pick sensors, configure them, read them. Talks to the firmware.",
+        "documentation" : { },
+        "id" : "3",
+        "name" : "API",
+        "properties" : {
+          "structurizr.dsl.identifier" : "api"
+        },
+        "relationships" : [ {
+          "description" : "Sends commands, receives readings",
+          "destinationId" : "4",
+          "id" : "9",
+          "sourceId" : "3",
+          "tags" : "Relationship",
+          "technology" : "USB, BLE, UART"
+        } ],
+        "tags" : "Element,Container",
+        "technology" : "Rust library, runs off the board"
+      }, {
+        "description" : "Runs on the XIAO; powers and reads the sensors the API asks for, sends the readings back.",
+        "documentation" : { },
+        "id" : "4",
+        "name" : "Firmware",
+        "properties" : {
+          "structurizr.dsl.identifier" : "fw"
+        },
+        "relationships" : [ {
+          "description" : "Powers, configures, reads",
+          "destinationId" : "5",
+          "id" : "10",
+          "sourceId" : "4",
+          "tags" : "Relationship"
+        } ],
+        "tags" : "Element,Container",
+        "technology" : "Rust binary, no_std, flashed with scripts/flash.sh"
+      } ],
+      "description" : "Turns on only the sensors asked for and hands back their readings.",
+      "documentation" : { },
+      "id" : "2",
+      "name" : "xiao-nrf52840-sensors",
+      "properties" : {
+        "structurizr.dsl.identifier" : "system"
+      },
+      "relationships" : [ {
+        "description" : "Powers, configures, reads",
+        "destinationId" : "5",
+        "id" : "7",
+        "sourceId" : "2",
+        "tags" : "Relationship"
+      } ],
+      "tags" : "Element,Software System"
+    }, {
+      "description" : "LSM6DS3TR-C IMU (accelerometer + gyroscope) and PDM microphone, soldered on the board.",
+      "documentation" : { },
+      "id" : "5",
+      "name" : "On-board sensors",
+      "properties" : {
+        "structurizr.dsl.identifier" : "sensors"
+      },
+      "tags" : "Element,Software System,External"
+    } ]
+  },
+  "name" : "xiao-nrf52840-sensors",
+  "properties" : {
+    "structurizr.inspection.error" : "7",
+    "structurizr.dsl" : "Ly8gU3RydWN0dXJpenIgRFNMLiBDMSBhbmQgQzIgYXQgc3RlcCAxLCBDMyBhdCBzdGVwIDMuCi8vIFRoaXMgZmlsZSBpcyBkYXRhOyBub3RoaW5nIGluIHRoZSB3b3JrZmxvdyBydW5zIGl0LiBSZW5kZXIgaXQgd2l0aAovLyB0aGUgU3RydWN0dXJpenIgdG9vbGluZyBvZiB5b3VyIGNob2ljZSBpbnRvIGRvY3MvYzQvLgoKd29ya3NwYWNlICJ4aWFvLW5yZjUyODQwLXNlbnNvcnMiICJBIGZpcm13YXJlIGZvciB0aGUgU2VlZWQgWElBTyBuUkY1Mjg0MCBTZW5zZSBwbHVzIGEgc21hbGwgUnVzdCBBUEkgdGhhdCB0YWxrcyB0byBpdCwgc28gYSBkZXZlbG9wZXIgY2FuIHN3aXRjaCBvbiBhbmQgcmVhZCB0aGUgYm9hcmQncyBtb3Rpb24gYW5kIHNvdW5kIHNlbnNvcnMgd2l0aG91dCB3cml0aW5nIGVtYmVkZGVkIGNvZGUuIiB7CgogICAgbW9kZWwgewogICAgICAgIGRldiA9IHBlcnNvbiAiRGV2ZWxvcGVyIiAiV3JpdGVzIGEgcHJvZ3JhbSB0aGF0IHVzZXMgdGhlIFhJQU8ncyBzZW5zb3JzLiIKCiAgICAgICAgc3lzdGVtID0gc29mdHdhcmVTeXN0ZW0gInhpYW8tbnJmNTI4NDAtc2Vuc29ycyIgIlR1cm5zIG9uIG9ubHkgdGhlIHNlbnNvcnMgYXNrZWQgZm9yIGFuZCBoYW5kcyBiYWNrIHRoZWlyIHJlYWRpbmdzLiIgewogICAgICAgICAgICAvLyBDMjogb25lIGNvbnRhaW5lciBwZXIgY3JhdGUgb3IgZGVwbG95YWJsZS4KICAgICAgICAgICAgYXBpID0gY29udGFpbmVyICJBUEkiICJXaGF0IHRoZSBkZXZlbG9wZXIgY2FsbHM6IHBpY2sgc2Vuc29ycywgY29uZmlndXJlIHRoZW0sIHJlYWQgdGhlbS4gVGFsa3MgdG8gdGhlIGZpcm13YXJlLiIgIlJ1c3QgbGlicmFyeSwgcnVucyBvZmYgdGhlIGJvYXJkIgogICAgICAgICAgICBmdyA9IGNvbnRhaW5lciAiRmlybXdhcmUiICJSdW5zIG9uIHRoZSBYSUFPOyBwb3dlcnMgYW5kIHJlYWRzIHRoZSBzZW5zb3JzIHRoZSBBUEkgYXNrcyBmb3IsIHNlbmRzIHRoZSByZWFkaW5ncyBiYWNrLiIgIlJ1c3QgYmluYXJ5LCBub19zdGQsIGZsYXNoZWQgd2l0aCBzY3JpcHRzL2ZsYXNoLnNoIgogICAgICAgIH0KCiAgICAgICAgc2Vuc29ycyA9IHNvZnR3YXJlU3lzdGVtICJPbi1ib2FyZCBzZW5zb3JzIiAiTFNNNkRTM1RSLUMgSU1VIChhY2NlbGVyb21ldGVyICsgZ3lyb3Njb3BlKSBhbmQgUERNIG1pY3JvcGhvbmUsIHNvbGRlcmVkIG9uIHRoZSBib2FyZC4iICJFeHRlcm5hbCIKCiAgICAgICAgZGV2IC0+IHN5c3RlbSAiUGlja3Mgc2Vuc29ycywgcmVhZHMgdGhlbSIKICAgICAgICBzeXN0ZW0gLT4gc2Vuc29ycyAiUG93ZXJzLCBjb25maWd1cmVzLCByZWFkcyIKCiAgICAgICAgZGV2IC0+IGFwaSAiUGlja3Mgc2Vuc29ycywgcmVhZHMgdGhlbSIKICAgICAgICAvLyBBbGwgdGhyZWUgbGlua3MgYXJlIHN1cHBvcnRlZC4gU2V2ZXJhbCBtYXkgYmUgaW4gdXNlIGF0IG9uY2UsIGJ1dCBlYWNoIHNlbnNvciBpcyBoZWxkIGJ5IG9uZSBsaW5rIGF0IGEgdGltZS4KICAgICAgICBhcGkgLT4gZncgIlNlbmRzIGNvbW1hbmRzLCByZWNlaXZlcyByZWFkaW5ncyIgIlVTQiwgQkxFLCBVQVJUIgogICAgICAgIGZ3IC0+IHNlbnNvcnMgIlBvd2VycywgY29uZmlndXJlcywgcmVhZHMiCiAgICB9CgogICAgdmlld3MgewogICAgICAgIHN5c3RlbUNvbnRleHQgc3lzdGVtICJDMSIgewogICAgICAgICAgICBpbmNsdWRlICoKICAgICAgICAgICAgYXV0b0xheW91dCBscgogICAgICAgIH0KCiAgICAgICAgY29udGFpbmVyIHN5c3RlbSAiQzIiIHsKICAgICAgICAgICAgaW5jbHVkZSAqCiAgICAgICAgICAgIGF1dG9MYXlvdXQgbHIKICAgICAgICB9CgogICAgICAgIC8vIGNvbXBvbmVudCBhcHAgIkMzLWFwcCIgewogICAgICAgIC8vICAgICBpbmNsdWRlICoKICAgICAgICAvLyAgICAgYXV0b0xheW91dAogICAgICAgIC8vIH0KCiAgICAgICAgLy8gREVDSVNJT046IGNsYXNzaWMgQzQgY29sb3VycyBzZXQgYnkgaGFuZDsgYHRoZW1lIGRlZmF1bHRgIGxvYWRlZAogICAgICAgIC8vIHRoZW0gZnJvbSBhIFVSTCB0aGF0IGRpZWQgd2l0aCBTdHJ1Y3R1cml6ciBjbG91ZCBFT0wgKDIwMjYtMDktMzApLgogICAgICAgIHN0eWxlcyB7CiAgICAgICAgICAgIGVsZW1lbnQgIlBlcnNvbiIgewogICAgICAgICAgICAgICAgc2hhcGUgUGVyc29uCiAgICAgICAgICAgICAgICBiYWNrZ3JvdW5kICMwODQyN2IKICAgICAgICAgICAgICAgIGNvbG9yICNmZmZmZmYKICAgICAgICAgICAgfQogICAgICAgICAgICBlbGVtZW50ICJTb2Z0d2FyZSBTeXN0ZW0iIHsKICAgICAgICAgICAgICAgIGJhY2tncm91bmQgIzExNjhiZAogICAgICAgICAgICAgICAgY29sb3IgI2ZmZmZmZgogICAgICAgICAgICB9CiAgICAgICAgICAgIGVsZW1lbnQgIkNvbnRhaW5lciIgewogICAgICAgICAgICAgICAgYmFja2dyb3VuZCAjNDM4ZGQ1CiAgICAgICAgICAgICAgICBjb2xvciAjZmZmZmZmCiAgICAgICAgICAgIH0KICAgICAgICAgICAgZWxlbWVudCAiQ29tcG9uZW50IiB7CiAgICAgICAgICAgICAgICBiYWNrZ3JvdW5kICM4NWJiZjAKICAgICAgICAgICAgICAgIGNvbG9yICMwMDAwMDAKICAgICAgICAgICAgfQogICAgICAgICAgICBlbGVtZW50ICJCb3VuZGFyeTpTb2Z0d2FyZVN5c3RlbSIgewogICAgICAgICAgICAgICAgY29sb3IgIzBiNDg4NAogICAgICAgICAgICB9CiAgICAgICAgICAgIGVsZW1lbnQgIkV4dGVybmFsIiB7CiAgICAgICAgICAgICAgICBiYWNrZ3JvdW5kICM5OTk5OTkKICAgICAgICAgICAgICAgIGNvbG9yICNmZmZmZmYKICAgICAgICAgICAgfQogICAgICAgIH0KICAgIH0KfQ==",
+    "structurizr.inspection.info" : "0",
+    "structurizr.inspection.ignore" : "0",
+    "structurizr.inspection.warning" : "0"
+  },
+  "views" : {
+    "configuration" : {
+      "styles" : {
+        "elements" : [ {
+          "color" : "#0b4884",
+          "tag" : "Boundary:SoftwareSystem"
+        }, {
+          "background" : "#85bbf0",
+          "color" : "#000000",
+          "tag" : "Component"
+        }, {
+          "background" : "#438dd5",
+          "color" : "#ffffff",
+          "tag" : "Container"
+        }, {
+          "background" : "#999999",
+          "color" : "#ffffff",
+          "tag" : "External"
+        }, {
+          "background" : "#08427b",
+          "color" : "#ffffff",
+          "shape" : "Person",
+          "tag" : "Person"
+        }, {
+          "background" : "#1168bd",
+          "color" : "#ffffff",
+          "tag" : "Software System"
+        } ]
+      },
+      "terminology" : { }
+    },
+    "containerViews" : [ {
+      "automaticLayout" : {
+        "edgeSeparation" : 50,
+        "nodeSeparation" : 50,
+        "rankDirection" : "LeftRight",
+        "rankSeparation" : 100,
+        "vertices" : true
+      },
+      "elements" : [ {
+        "id" : "1",
+        "x" : 0,
+        "y" : 0
+      }, {
+        "id" : "3",
+        "x" : 0,
+        "y" : 0
+      }, {
+        "id" : "4",
+        "x" : 0,
+        "y" : 0
+      }, {
+        "id" : "5",
+        "x" : 0,
+        "y" : 0
+      } ],
+      "externalSoftwareSystemBoundariesVisible" : false,
+      "key" : "C2",
+      "name" : "Container View: xiao-nrf52840-sensors",
+      "order" : 2,
+      "relationships" : [ {
+        "id" : "10"
+      }, {
+        "id" : "8"
+      }, {
+        "id" : "9"
+      } ],
+      "softwareSystemId" : "2"
+    } ],
+    "systemContextViews" : [ {
+      "automaticLayout" : {
+        "edgeSeparation" : 50,
+        "nodeSeparation" : 50,
+        "rankDirection" : "LeftRight",
+        "rankSeparation" : 100,
+        "vertices" : true
+      },
+      "elements" : [ {
+        "id" : "1",
+        "x" : 0,
+        "y" : 0
+      }, {
+        "id" : "2",
+        "x" : 0,
+        "y" : 0
+      }, {
+        "id" : "5",
+        "x" : 0,
+        "y" : 0
+      } ],
+      "enterpriseBoundaryVisible" : true,
+      "key" : "C1",
+      "name" : "System Context View: xiao-nrf52840-sensors",
+      "order" : 1,
+      "relationships" : [ {
+        "id" : "6"
+      }, {
+        "id" : "7"
+      } ],
+      "softwareSystemId" : "2"
+    } ]
+  }
+}
